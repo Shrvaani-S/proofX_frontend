@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/Novintix Tech/.claude/projects/C--Users-Novintix-Tech-Documents-GitHub-recruitx-proofx-label-sync/**)",
+      "Read(//c/Users/Novintix Tech/.claude/projects/C--Users-Novintix-Tech-Documents-GitHub-recruitx-proofx-label-sync/memory/**)",
+      "mcp__ide__getDiagnostics",
+      "Bash(bun add:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(mkdir -p pages report types data context)",
+      "Bash(cp components/UploadScreen.tsx pages/UploadPage.tsx)",
+      "Bash(cp components/ResultsScreen.tsx pages/ResultsPage.tsx)",
+      "Bash(cp components/ExportModal.tsx report/ExportModal.tsx)",
+      "Bash(cp styles.css index.css)",
+      "Bash(npm run:*)"
+    ]
+  }
+}
