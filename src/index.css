@@ -106,3 +106,18 @@
 .bbox-pulse {
   animation: proofx-pulse 1s ease-out 2;
 }
+
+@keyframes proofx-progress-stripes {
+  0% { background-position: 0 0; }
+  100% { background-position: 28px 0; }
+}
+.progress-stripes {
+  background-image: repeating-linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.35) 0px,
+    rgba(255, 255, 255, 0.35) 7px,
+    transparent 7px,
+    transparent 14px
+  );
+  animation: proofx-progress-stripes 0.7s linear infinite;
+}

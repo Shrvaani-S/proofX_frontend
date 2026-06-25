@@ -32,7 +32,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
           <ScanLine size={18} />
           <span className="text-sm font-bold tracking-tight uppercase">ProofX</span>
           <span className="text-white/30 mx-1">|</span>
-          <span className="text-xs text-white/70 font-medium">Medical Label Comparison</span>
+          <span className="text-xs text-white/70 font-medium">Label proofing reading tool</span>
         </div>
       </header>
 
@@ -48,7 +48,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
             Select your workflow
           </h1>
           <p className="mt-2 text-sm text-muted-foreground max-w-md mx-auto">
-            Compare medical labels and flag differences — run a quick comparison or validate against a Label Requirement Form.
+            Compare labels and flag differences — run a quick comparison or validate against a Label Requirement Form.
           </p>
         </div>
 
@@ -60,7 +60,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
             accent="#F07922"
             badge="Quick · No setup"
             icon={<FileCheck2 className="h-6 w-6" style={{ color: "#F07922" }} />}
-            title="Label Comparison"
+            title="Label visual comparison"
             description="Upload a master and revised label pair. Differences are detected and annotated automatically across all categories."
             features={QUICK_FEATURES}
             cta="Start Comparison"
@@ -73,7 +73,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
             accent="#1C2E59"
             badge="Validated · Audit-ready"
             icon={<ClipboardList className="h-6 w-6 text-primary" />}
-            title="Workflow with LRF"
+            title="Label proof reading"
             description="Begin with a Label Requirement Form to declare expected changes. Every finding is automatically classified as Expected or Unexpected."
             features={LRF_FEATURES}
             cta="Start with LRF"
@@ -85,7 +85,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
 
       {/* Footer */}
       <footer className="py-5 text-center text-xs text-muted-foreground flex-shrink-0">
-        ProofX · Medical Label Compliance
+        ProofX · Label Compliance
       </footer>
     </div>
   );

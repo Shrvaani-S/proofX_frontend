@@ -65,6 +65,14 @@ export interface ReconcileLRF {
   requirements: ReconcileRequirement[];
 }
 
+/** A reference image to upload alongside a reconcile() call — `name` must match
+ *  the `ref_image:<name>` token used in the corresponding requirement's old/new value
+ *  (see reconciliation_layer's "graphic" match_type: two reference images, old + new). */
+export interface RefImageUpload {
+  name: string;
+  file: File;
+}
+
 export type ReconcileVerdict = "DONE_CORRECT" | "DONE_INCORRECT" | "NOT_DONE" | "NEEDS_REVIEW";
 
 export interface ReconcileReportRequirement {
@@ -119,12 +127,15 @@ export async function alignCompare(
 export async function reconcile(
   runId: string,
   lrf: ReconcileLRF,
-  opts: { reviewerAcknowledged?: string[] } = {},
+  opts: { reviewerAcknowledged?: string[]; refImages?: RefImageUpload[] } = {},
 ): Promise<ReconcileReport> {
   const form = new FormData();
   form.append("run_id", runId);
   form.append("lrf", JSON.stringify(lrf));
   form.append("reviewer_acknowledged", JSON.stringify(opts.reviewerAcknowledged ?? []));
+  for (const ref of opts.refImages ?? []) {
+    form.append("ref_images", ref.file, ref.name);
+  }
 
   const res = await fetch(`${API_BASE_URL}/api/reconcile`, { method: "POST", body: form });
   if (!res.ok) throw new Error(`reconcile failed: ${await parseErrorDetail(res)}`);

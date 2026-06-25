@@ -16,13 +16,15 @@ interface Props {
   onChangeType: (attrId: string, v: string) => void;
   onOldValue:   (attrId: string, v: string) => void;
   onNewValue:   (attrId: string, v: string) => void;
+  onOldFile:    (attrId: string, f: File) => void;
+  onNewFile:    (attrId: string, f: File) => void;
   onClear:      (attrId: string, isCustom: boolean) => void;
   onAddCustom:  (groupId: string, name: string, changeType: string, oldValue: string, newValue: string) => void;
 }
 
 export default function LRFAttributeGroup({
   groupId, name, attributes, changes, customAttributes, categoryId,
-  onChangeType, onOldValue, onNewValue, onClear, onAddCustom,
+  onChangeType, onOldValue, onNewValue, onOldFile, onNewFile, onClear, onAddCustom,
 }: Props) {
   const [isOpen, setIsOpen] = useState(false);
 
@@ -67,6 +69,8 @@ export default function LRFAttributeGroup({
               onChangeType={(v) => onChangeType(attr.id, v)}
               onOldValue={(v) => onOldValue(attr.id, v)}
               onNewValue={(v) => onNewValue(attr.id, v)}
+              onOldFile={(f) => onOldFile(attr.id, f)}
+              onNewFile={(f) => onNewFile(attr.id, f)}
               onClear={() => onClear(attr.id, false)}
             />
           ))}

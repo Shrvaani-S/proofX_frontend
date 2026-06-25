@@ -41,9 +41,11 @@ export default function App() {
         );
         nextPairs.push(pair);
 
-        const reconcileLrf = lrfData ? buildReconcileLRF(lrfData, lrfData.metadata.crNumber || "LRF") : null;
+        const { lrf: reconcileLrf, refImages } = lrfData
+          ? buildReconcileLRF(lrfData, lrfData.metadata.crNumber || "LRF")
+          : { lrf: null, refImages: [] };
         if (reconcileLrf) {
-          const report = await reconcile(response.run_id, reconcileLrf);
+          const report = await reconcile(response.run_id, reconcileLrf, { refImages });
           nextReconciliation[pairId] = applyReconciliation(report, idMap);
         }
       }

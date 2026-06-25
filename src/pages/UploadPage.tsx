@@ -406,7 +406,7 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
           )}
           <div className="text-center mb-10">
             <h1 className="text-[28px] font-semibold tracking-tight text-foreground">
-              Compare medical labels
+              Compare labels
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">
               Upload a master and revised label to identify text, graphics, and barcode differences.

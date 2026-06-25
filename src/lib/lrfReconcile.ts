@@ -1,22 +1,23 @@
 // Bridges this app's LRF form (src/data/lrfAttributes.ts — ~80 attributes,
 // explicit Old value / New value fields, Add/Remove/Modify) onto the backend
 // reconciliation engine's strict contract (reconciliation_layer/engine.py:
-// FIELD_MATCH_TYPE only recognises field="address"|"authorized_rep"|"eifu_link"|"logo",
-// each needing an actual old->new text pair it can search for in the OCR'd findings).
+// FIELD_MATCH_TYPE only recognises field="address"|"authorized_rep"|"eifu_link"|"logo").
 //
-// Only attributes with a clear, low-ambiguity correspondence to one of those
-// fields, AND both an old and a new value (i.e. changeType "Modify" — the
-// engine's token match needs literal text on both sides; "Add"/"Remove" only
-// supply one side and would otherwise trivially match), are sent to
-// /api/reconcile. Everything else (symbols, barcode specifics, logo image
-// swaps, Add/Remove changes) is NOT faked into the backend engine — it stays
-// on the existing client-side classifyFinding heuristic in utils/lrfClassify.ts.
-// Logo is a known gap: the engine supports it (two reference images), but
-// this app's LRF form only keeps the new logo's filename, not the image
-// blob, so there is nothing real to send yet.
+// Two distinct kinds of requirement get sent to /api/reconcile:
+//   - TEXT fields (address/authorized_rep/eifu_link): need literal old->new text on
+//     both sides (the engine's token match needs both; "Add"/"Remove" only supply one
+//     side and would otherwise trivially match) — i.e. effectively changeType "Modify".
+//   - GRAPHIC field (logo): needs two actual reference IMAGES (old + new), uploaded
+//     alongside the LRF JSON as multipart files, referenced by `ref_image:<name>`
+//     tokens — see router/reconcile.py's `ref_images` param. LRFAttributeRow.tsx now
+//     keeps the real `File` objects (`oldFile`/`newFile`), not just filenames, so this
+//     is a genuine image-vs-image comparison, not a faked text match.
+// Everything else (symbols, barcode specifics, every other free-text attribute without
+// both an old and new value) is NOT faked into the backend engine — it stays on the
+// existing client-side classifyFinding heuristic in utils/lrfClassify.ts.
 
 import type { LRFData } from "@/types/lrf";
-import type { ReconcileLRF, ReconcileReport, ReconcileRequirement } from "@/lib/api";
+import type { ReconcileLRF, ReconcileReport, ReconcileRequirement, RefImageUpload } from "@/lib/api";
 
 const ATTRIBUTE_TO_BACKEND_FIELD: Record<string, "address" | "authorized_rep" | "eifu_link"> = {
   manufacturer_addr: "address",
@@ -26,12 +27,41 @@ const ATTRIBUTE_TO_BACKEND_FIELD: Record<string, "address" | "authorized_rep" | 
   eifu_url: "eifu_link",
 };
 
-/** Returns null when no LRF attribute maps to a backend-verifiable field — caller should skip reconciliation. */
-export function buildReconcileLRF(lrfData: LRFData, lrfId: string): ReconcileLRF | null {
+const IMAGE_ATTRIBUTE_TO_BACKEND_FIELD: Record<string, "logo"> = {
+  logo_change: "logo",
+};
+
+export interface ReconcileLRFBuild {
+  lrf: ReconcileLRF | null;
+  /** Files to upload as `ref_images` alongside the /api/reconcile call. */
+  refImages: RefImageUpload[];
+}
+
+/** lrf is null when no LRF attribute maps to a backend-verifiable field — caller should skip reconciliation. */
+export function buildReconcileLRF(lrfData: LRFData, lrfId: string): ReconcileLRFBuild {
   const requirements: ReconcileRequirement[] = [];
+  const refImages: RefImageUpload[] = [];
 
   for (const [attrId, change] of Object.entries(lrfData.changes)) {
     if (!change.changeType) continue;
+
+    const imageField = IMAGE_ATTRIBUTE_TO_BACKEND_FIELD[attrId];
+    if (imageField) {
+      // Needs both references to do a real before/after comparison — an "Add" with
+      // only a new image has nothing to compare it against.
+      if (change.changeType !== "Modify" || !change.oldFile || !change.newFile) continue;
+      const oldName = `${attrId}_old_${change.oldFile.name}`;
+      const newName = `${attrId}_new_${change.newFile.name}`;
+      refImages.push({ name: oldName, file: change.oldFile }, { name: newName, file: change.newFile });
+      requirements.push({
+        id: `R${requirements.length + 1}`,
+        field: imageField,
+        old: `ref_image:${oldName}`,
+        new: `ref_image:${newName}`,
+      });
+      continue;
+    }
+
     const field = ATTRIBUTE_TO_BACKEND_FIELD[attrId];
     if (!field) continue;
     const old = change.oldValue.trim();
@@ -45,7 +75,7 @@ export function buildReconcileLRF(lrfData: LRFData, lrfId: string): ReconcileLRF
     });
   }
 
-  return requirements.length > 0 ? { lrf_id: lrfId, requirements } : null;
+  return { lrf: requirements.length > 0 ? { lrf_id: lrfId, requirements } : null, refImages };
 }
 
 export interface ReconciliationOverrides {
@@ -81,5 +111,7 @@ export function applyReconciliation(
 /** Findings the backend reconciliation didn't cover at all (e.g. it returned null/wasn't run). */
 export function hasMappableLrf(lrfData: LRFData | null | undefined): boolean {
   if (!lrfData) return false;
-  return Object.keys(lrfData.changes).some((id) => id in ATTRIBUTE_TO_BACKEND_FIELD);
+  return Object.keys(lrfData.changes).some(
+    (id) => id in ATTRIBUTE_TO_BACKEND_FIELD || id in IMAGE_ATTRIBUTE_TO_BACKEND_FIELD,
+  );
 }

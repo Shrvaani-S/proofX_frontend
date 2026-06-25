@@ -16,13 +16,15 @@ interface Props {
   onChangeType: (v: string) => void;
   onOldValue: (v: string) => void;
   onNewValue: (v: string) => void;
+  onOldFile?: (f: File) => void;
+  onNewFile?: (f: File) => void;
   onClear: () => void;
 }
 
 export default function LRFAttributeRow({
   label, placeholder, changeType, oldValue, newValue,
   isCustom, groupId, categoryId: _categoryId,
-  onChangeType, onOldValue, onNewValue, onClear,
+  onChangeType, onOldValue, onNewValue, onOldFile, onNewFile, onClear,
 }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -47,9 +49,15 @@ export default function LRFAttributeRow({
   const showNew = !noTextFields && !isBackgroundGroup && (changeType === "Add" || changeType === "Modify");
   const showRegion = !noTextFields && isBackgroundGroup && changeType !== "";
 
-  const showUpload =
+  // Graphic diff needs BOTH the old and new image to actually compare against each
+  // other (backend's logo match_type does a relative shape+colour comparison of the
+  // two references) — a single "new" upload alone can't drive a real before/after
+  // graphic diff, only "this is what it should look like now".
+  const showNewUpload =
     !isDeleted && !isBackgroundGroup &&
     isImageGroup && (changeType === "Add" || changeType === "Modify");
+  const showOldUpload =
+    !isBackgroundGroup && isImageGroup && changeType === "Modify";
 
   const hasDefined = changeType !== "";
 
@@ -130,19 +138,38 @@ export default function LRFAttributeRow({
               </div>
             )}
 
-            {showUpload && (
+            {showOldUpload && (
               <div className="flex-1">
-                <label className="block text-xs font-medium text-muted-foreground mb-1">Upload</label>
+                <label className="block text-xs font-medium text-muted-foreground mb-1">Old image</label>
                 <label className="flex items-center gap-2 h-9 rounded-md border border-dashed border-border bg-white px-3 text-sm text-muted-foreground cursor-pointer hover:border-primary hover:text-foreground transition-colors">
                   <Upload size={14} />
-                  <span>{newValue || "Upload image"}</span>
+                  <span className="truncate">{oldValue || "Upload current image"}</span>
                   <input
                     type="file"
                     accept="image/*,.svg"
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
-                      if (file) onNewValue(file.name);
+                      if (file) { onOldValue(file.name); onOldFile?.(file); }
+                    }}
+                  />
+                </label>
+              </div>
+            )}
+
+            {showNewUpload && (
+              <div className="flex-1">
+                <label className="block text-xs font-medium text-muted-foreground mb-1">New image</label>
+                <label className="flex items-center gap-2 h-9 rounded-md border border-dashed border-border bg-white px-3 text-sm text-muted-foreground cursor-pointer hover:border-primary hover:text-foreground transition-colors">
+                  <Upload size={14} />
+                  <span className="truncate">{newValue || "Upload new image"}</span>
+                  <input
+                    type="file"
+                    accept="image/*,.svg"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) { onNewValue(file.name); onNewFile?.(file); }
                     }}
                   />
                 </label>

@@ -17,17 +17,34 @@ interface Props {
 const PROGRESS_CEILING = 96;
 const PROGRESS_TIME_CONSTANT_MS = 2600;
 
+// Cosmetic status line that cycles independently of the progress bars, so
+// the modal keeps visibly "doing something" even once a bar nears its
+// ceiling and stalls there waiting on the real request.
+const STATUS_MESSAGES = [
+  "Aligning master & revised pages...",
+  "Scanning for text differences...",
+  "Checking barcode payloads...",
+  "Comparing graphics & colour shifts...",
+  "Cross-referencing requirement form...",
+  "Compiling findings report...",
+];
+const STATUS_INTERVAL_MS = 1800;
+
 const AnalysisProgressModal = ({ isOpen, sessionLabel }: Props) => {
   const [progress, setProgress] = useState<number[]>([0, 0, 0, 0]);
+  const [statusIdx, setStatusIdx] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const statusRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (!isOpen) {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (statusRef.current) clearInterval(statusRef.current);
       return;
     }
 
     setProgress([0, 0, 0, 0]);
+    setStatusIdx(0);
     const start = Date.now();
     const offsets = [0, 150, 300, 450];
 
@@ -39,8 +56,13 @@ const AnalysisProgressModal = ({ isOpen, sessionLabel }: Props) => {
       setProgress(next);
     }, 60);
 
+    statusRef.current = setInterval(() => {
+      setStatusIdx((i) => (i + 1) % STATUS_MESSAGES.length);
+    }, STATUS_INTERVAL_MS);
+
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
+      if (statusRef.current) clearInterval(statusRef.current);
     };
   }, [isOpen]);
 
@@ -54,11 +76,14 @@ const AnalysisProgressModal = ({ isOpen, sessionLabel }: Props) => {
 
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
-          <ScanLine className="h-5 w-5 text-primary" />
+          <ScanLine className="h-5 w-5 text-primary animate-spin" style={{ animationDuration: "2.2s" }} />
           <span className="text-sm font-bold tracking-tight uppercase text-primary">ProofX</span>
         </div>
         <div className="text-lg font-semibold text-foreground mb-0.5">Analysing labels</div>
-        <div className="text-xs text-muted-foreground mb-6 truncate">{sessionLabel}</div>
+        <div className="text-xs text-muted-foreground mb-1 truncate">{sessionLabel}</div>
+        <div className="text-xs text-accent font-medium mb-6 h-4 transition-opacity duration-300">
+          {STATUS_MESSAGES[statusIdx]}
+        </div>
 
         {/* Per-category progress */}
         <div className="space-y-4">
@@ -75,7 +100,7 @@ const AnalysisProgressModal = ({ isOpen, sessionLabel }: Props) => {
                 </div>
                 <div className="h-1.5 bg-surface-2 rounded-full overflow-hidden">
                   <div
-                    className="h-full transition-[width] duration-100 ease-out rounded-full"
+                    className={`h-full transition-[width] duration-100 ease-out rounded-full ${done ? "" : "progress-stripes"}`}
                     style={{ width: `${pct}%`, backgroundColor: c.color }}
                   />
                 </div>

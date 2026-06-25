@@ -142,6 +142,28 @@ export function LRFPage({ onNext, onSkip, onBack, initialData }: Props) {
     }));
   };
 
+  const handleOldFile = (attrId: string, file: File) => {
+    setChanges((prev) => ({
+      ...prev,
+      [attrId]: {
+        ...prev[attrId], oldFile: file,
+        oldValue: prev[attrId]?.oldValue || "", newValue: prev[attrId]?.newValue || "",
+        changeType: prev[attrId]?.changeType || "",
+      },
+    }));
+  };
+
+  const handleNewFile = (attrId: string, file: File) => {
+    setChanges((prev) => ({
+      ...prev,
+      [attrId]: {
+        ...prev[attrId], newFile: file,
+        oldValue: prev[attrId]?.oldValue || "", newValue: prev[attrId]?.newValue || "",
+        changeType: prev[attrId]?.changeType || "",
+      },
+    }));
+  };
+
   const handleClear = (attrId: string, isCustom: boolean) => {
     if (isCustom) {
       setCustomAttributes((prev) => {
@@ -369,6 +391,8 @@ export function LRFPage({ onNext, onSkip, onBack, initialData }: Props) {
                     onChangeType={handleChangeType}
                     onOldValue={handleOldValue}
                     onNewValue={handleNewValue}
+                    onOldFile={handleOldFile}
+                    onNewFile={handleNewFile}
                     onClear={handleClear}
                     onAddCustom={handleAddCustom}
                   />
