@@ -290,6 +290,9 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
             onMouseEnter={() => setHoveredPanel("master")}
             onMouseLeave={() => setHoveredPanel(null)}
           />
+          {/* Explicit 2px divider: a 1px theme border (#E0E0E0 on #F1F3F4) is
+              near-invisible and sub-pixel-rounds away on scaled/HiDPI monitors. */}
+          <div className="w-1 flex-shrink-0 self-stretch" style={{ backgroundColor: "#1C2E59" }} aria-hidden />
           <LabelPanel
             title={pair.revisedName}
             version={`Revised · ${pair.revisedVersion}`}
@@ -625,8 +628,46 @@ function LabelPanel({
     return () => scroller.removeEventListener("wheel", handler);
   }, [scrollRef]);
 
+  // Click-and-drag to pan the label (annotation overlays are pointerEvents:none,
+  // so they don't intercept the drag). When sync-scroll is on, the scroll events
+  // emitted here mirror to the other panel automatically.
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    let dragging = false;
+    let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+    const onDown = (e: MouseEvent) => {
+      if (e.button !== 0) return; // left button only
+      dragging = true;
+      startX = e.clientX;
+      startY = e.clientY;
+      startLeft = scroller.scrollLeft;
+      startTop = scroller.scrollTop;
+      scroller.style.cursor = "grabbing";
+      e.preventDefault(); // suppress native image-ghost drag / text selection
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      scroller.scrollLeft = startLeft - (e.clientX - startX);
+      scroller.scrollTop = startTop - (e.clientY - startY);
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      scroller.style.cursor = "";
+    };
+    scroller.addEventListener("mousedown", onDown);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      scroller.removeEventListener("mousedown", onDown);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [scrollRef]);
+
   return (
-    <div className="flex-1 flex flex-col min-w-0 border-r border-border last:border-r-0">
+    <div className="flex-1 flex flex-col min-w-0">
       <div
         className="h-11 px-4 flex items-center justify-between flex-shrink-0"
         style={{
@@ -661,7 +702,7 @@ function LabelPanel({
           </span>
         </div>
       </div>
-      <div ref={scrollRef} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} className="flex-1 min-h-0 overflow-auto bg-surface-2 p-6 no-scrollbar">
+      <div ref={scrollRef} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} className="flex-1 min-h-0 overflow-auto bg-surface-2 p-6 no-scrollbar cursor-grab select-none">
         <div
           ref={cardRef}
           className="relative mx-auto bg-white rounded-lg shadow-sm overflow-hidden"
