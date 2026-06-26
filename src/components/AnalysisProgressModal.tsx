@@ -5,6 +5,7 @@ import { CATEGORIES } from "@/lib/proofx-data";
 interface Props {
   isOpen: boolean;
   sessionLabel: string;
+  bulkProgress?: { completed: number; total: number } | null;
 }
 
 // Progress here is purely cosmetic — the real work is the backend
@@ -30,7 +31,7 @@ const STATUS_MESSAGES = [
 ];
 const STATUS_INTERVAL_MS = 1800;
 
-const AnalysisProgressModal = ({ isOpen, sessionLabel }: Props) => {
+const AnalysisProgressModal = ({ isOpen, sessionLabel, bulkProgress }: Props) => {
   const [progress, setProgress] = useState<number[]>([0, 0, 0, 0]);
   const [statusIdx, setStatusIdx] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -108,6 +109,27 @@ const AnalysisProgressModal = ({ isOpen, sessionLabel }: Props) => {
             );
           })}
         </div>
+
+        {/* Bulk pair progress (real) */}
+        {bulkProgress && (
+          <div className="mt-5 space-y-1.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Pairs processed</span>
+              <span className="font-medium text-foreground">
+                {bulkProgress.completed} / {bulkProgress.total}
+              </span>
+            </div>
+            <div className="h-2 bg-surface-2 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-[width] duration-500 ease-out"
+                style={{
+                  width: `${bulkProgress.total > 0 ? (bulkProgress.completed / bulkProgress.total) * 100 : 0}%`,
+                  backgroundColor: "#2563EB",
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Overall percentage */}
         <div className="mt-5 flex items-center justify-between text-xs text-muted-foreground">

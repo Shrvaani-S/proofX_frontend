@@ -62,10 +62,15 @@ export function buildReconcileLRF(lrfData: LRFData, lrfId: string): ReconcileLRF
       continue;
     }
 
-    const field = ATTRIBUTE_TO_BACKEND_FIELD[attrId];
-    if (!field) continue;
-    const old = change.oldValue.trim();
-    const next = change.newValue.trim();
+    // Use the known backend field name when available (ensures correct match_type: address,
+    // authorized_rep → token; eifu_link → exact). For all other text attributes fall back
+    // to the attrId itself — the backend engine defaults unknown field names to "token" match,
+    // which checks that old disappears from base and new appears in revised.
+    const field = ATTRIBUTE_TO_BACKEND_FIELD[attrId] ?? attrId;
+    // Strip URL protocol — OCR never includes it, so matching would always fail otherwise.
+    const old = change.oldValue.trim().replace(/^https?:\/\//i, "");
+    const next = change.newValue.trim().replace(/^https?:\/\//i, "");
+    // Both sides required: a one-sided token match trivially passes on almost any finding.
     if (!old || !next) continue;
     requirements.push({
       id: `R${requirements.length + 1}`,
@@ -92,18 +97,26 @@ export function applyReconciliation(
   const byFrontendId: Record<string, "expected" | "unexpected"> = {};
 
   for (const req of report.requirements) {
-    const status = req.verdict === "DONE_CORRECT" ? "expected" : "unexpected";
+    // DONE_CORRECT: confirmed match. NEEDS_REVIEW: match found but OCR confidence
+    // low — the change WAS identified against the LRF, still expected.
+    // DONE_INCORRECT: wrong values. NOT_DONE: no evidence found (no finding_ids).
+    const status =
+      req.verdict === "DONE_CORRECT" || req.verdict === "NEEDS_REVIEW"
+        ? "expected"
+        : "unexpected";
     for (const backendId of req.evidence_finding_ids) {
       const frontendId = idMap[backendId];
       if (frontendId) byFrontendId[frontendId] = status;
     }
   }
-  for (const item of report.unexpected) {
-    for (const backendId of item.finding_ids) {
-      const frontendId = idMap[backendId];
-      if (frontendId) byFrontendId[frontendId] = "unexpected";
-    }
-  }
+  // Unexpected-bucket findings are NOT written into byFrontendId — they stay
+  // undefined so classifyFinding can still evaluate them via the ResultsPage
+  // fallback. This handles the case where the same LRF change appears in two
+  // places on the label: the backend claimed one instance (OCR succeeded) and
+  // put the second in the unexpected bucket (e.g. vertical text, garbled OCR).
+  // classifyFinding may still match the second instance via before/after text.
+  // If classifyFinding also can't match (completely garbled), it returns
+  // "unexpected" — same outcome as before, no regression.
 
   return { byFrontendId, overall: report.overall, globalFlags: report.global_flags };
 }

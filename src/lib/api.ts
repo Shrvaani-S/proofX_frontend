@@ -2,7 +2,7 @@
 // router/reconcile.py). Mirrors the backend's actual JSON contract — see
 // proofx_backend/CLAUDE.md and align_then_compare.py's `combined` dict.
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://label-comparator-new.azurewebsites.net";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 export interface BackendFinding {
   id: number;
@@ -99,6 +99,34 @@ export interface ReconcileReport {
   unexpected: ReconcileUnexpectedItem[];
 }
 
+// ── Bulk compare types ────────────────────────────────────────────────────
+
+export interface BulkPairResult {
+  index: number;
+  run_id: string;
+  status: "done" | "error";
+  base_name: string;
+  revised_name: string;
+  // Present when status === "done"
+  combined_report?: CombinedReport;
+  notes?: string[];
+  comparison_inputs?: "cropped_overlap" | "full_page";
+  proof_png_base64?: string;
+  base_image_png_base64?: string;
+  revised_image_png_base64?: string;
+  // Present when status === "error"
+  error?: string;
+}
+
+export interface BulkJobStatus {
+  job_id: string;
+  status: "running" | "done";
+  total: number;
+  completed: number;
+  failed: number;
+  results: BulkPairResult[];
+}
+
 async function parseErrorDetail(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -121,6 +149,28 @@ export async function alignCompare(
 
   const res = await fetch(`${API_BASE_URL}/api/align-compare`, { method: "POST", body: form });
   if (!res.ok) throw new Error(`align-compare failed: ${await parseErrorDetail(res)}`);
+  return res.json();
+}
+
+export async function startBulkCompare(
+  bases: File[],
+  reviseds: File[],
+  opts: { page?: number; nativeResolution?: boolean } = {},
+): Promise<{ job_id: string; total: number }> {
+  const form = new FormData();
+  for (const f of bases) form.append("bases", f);
+  for (const f of reviseds) form.append("reviseds", f);
+  form.append("page", String(opts.page ?? 0));
+  form.append("native_resolution", String(opts.nativeResolution ?? false));
+
+  const res = await fetch(`${API_BASE_URL}/api/bulk-compare`, { method: "POST", body: form });
+  if (!res.ok) throw new Error(`bulk-compare failed: ${await parseErrorDetail(res)}`);
+  return res.json();
+}
+
+export async function getBulkStatus(jobId: string): Promise<BulkJobStatus> {
+  const res = await fetch(`${API_BASE_URL}/api/bulk-status/${jobId}`);
+  if (!res.ok) throw new Error(`bulk-status failed: ${await parseErrorDetail(res)}`);
   return res.json();
 }
 
