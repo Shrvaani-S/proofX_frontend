@@ -172,6 +172,14 @@ async function captureCardToDataUrl(cardEl: HTMLDivElement): Promise<string> {
     allowTaint: true,
     backgroundColor: "#ffffff",
     onclone: (_doc, clonedEl) => {
+      // Strip the hover "spotlight" overlay if the user clicked Export while
+      // hovering a finding. It dims the whole card via a giant box-shadow
+      // (`0 0 0 9999px rgba(0,0,0,…)`); capturing it would bake the dark mask
+      // into the exported label image.
+      clonedEl.querySelectorAll<HTMLElement>("div").forEach((el) => {
+        if (el.style.boxShadow.includes("9999px")) el.remove();
+      });
+
       const svgEl = clonedEl.querySelector<SVGSVGElement>("svg");
       if (!svgEl) return; // uploaded file — nothing to fix
 
