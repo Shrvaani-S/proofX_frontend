@@ -42,10 +42,17 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
     const availH = el.clientHeight - 48;
     const availW = el.clientWidth - 48;
     if (availH > 0 && availW > 0) {
-      return Math.round(Math.max(30, Math.min(200, Math.min(availW / w, availH / h) * 100)));
+      // Floor low enough that large real-backend images can fit; without this the
+      // old 30% floor sat above the true fit and the full label could never show.
+      return Math.round(Math.max(5, Math.min(200, Math.min(availW / w, availH / h) * 100)));
     }
     return 100;
   };
+
+  // Dynamic lower bound for manual zoom-out: always low enough to reach the
+  // fit-the-whole-label point, but never above the 30% default floor for small
+  // labels (preserves prior behaviour when the label is smaller than the viewport).
+  const minZoom = (el: HTMLDivElement | null) => (el ? Math.min(30, calcFit(el)) : 30);
 
   // Auto-fit zoom on mount so the full label is visible without scrolling
   useLayoutEffect(() => {
@@ -142,18 +149,20 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
   // the browser processes it as a page zoom (element-level listeners fire too late
   // in Chromium's compositor pipeline).
   useEffect(() => {
-    const updater = (z: number, delta: number) =>
-      Math.max(30, Math.min(200, z + (delta > 0 ? -10 : 10)));
+    const updater = (z: number, delta: number, min: number) =>
+      Math.max(min, Math.min(200, z + (delta > 0 ? -10 : 10)));
     const handler = (e: WheelEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
+      const mMin = minZoom(masterRef.current);
+      const rMin = minZoom(revisedRef.current);
       if (syncScroll || !hoveredPanel) {
-        setMasterZoom((z) => updater(z, e.deltaY));
-        setRevisedZoom((z) => updater(z, e.deltaY));
+        setMasterZoom((z) => updater(z, e.deltaY, mMin));
+        setRevisedZoom((z) => updater(z, e.deltaY, rMin));
       } else if (hoveredPanel === "master") {
-        setMasterZoom((z) => updater(z, e.deltaY));
+        setMasterZoom((z) => updater(z, e.deltaY, mMin));
       } else {
-        setRevisedZoom((z) => updater(z, e.deltaY));
+        setRevisedZoom((z) => updater(z, e.deltaY, rMin));
       }
     };
     window.addEventListener("wheel", handler, { passive: false });
@@ -487,7 +496,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
           </label>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { setMasterZoom((z) => Math.max(30, z - 10)); setRevisedZoom((z) => Math.max(30, z - 10)); }}
+              onClick={() => { const mMin = minZoom(masterRef.current); const rMin = minZoom(revisedRef.current); setMasterZoom((z) => Math.max(mMin, z - 10)); setRevisedZoom((z) => Math.max(rMin, z - 10)); }}
               className="h-6 w-6 rounded border border-border hover:bg-surface-2"
             >
               −
