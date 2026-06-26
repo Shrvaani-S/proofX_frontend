@@ -292,7 +292,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
           />
           {/* Explicit 2px divider: a 1px theme border (#E0E0E0 on #F1F3F4) is
               near-invisible and sub-pixel-rounds away on scaled/HiDPI monitors. */}
-          <div className="w-0.5 flex-shrink-0 self-stretch" style={{ backgroundColor: "#1C2E59" }} aria-hidden />
+          <div className="w-1 flex-shrink-0 self-stretch" style={{ backgroundColor: "#1C2E59" }} aria-hidden />
           <LabelPanel
             title={pair.revisedName}
             version={`Revised · ${pair.revisedVersion}`}
