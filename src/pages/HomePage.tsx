@@ -76,7 +76,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
             title="Label proof reading"
             description="Begin with a Label Requirement Form to declare expected changes. Every finding is automatically classified as Expected or Unexpected."
             features={LRF_FEATURES}
-            cta="Start with LRF"
+            cta="Start with your changes"
             ctaStyle="bg-primary text-white hover:opacity-90"
             onClick={onFullWorkflow}
           />
