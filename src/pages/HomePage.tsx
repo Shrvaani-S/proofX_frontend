@@ -1,9 +1,10 @@
 import { type ReactNode } from "react";
-import { ArrowRight, ScanLine, FileCheck2, ClipboardList, CheckCircle2 } from "lucide-react";
+import { ArrowRight, ScanLine, FileCheck2, ClipboardList, CheckCircle2, LogOut } from "lucide-react";
 
 interface Props {
   onQuickCompare: () => void;
   onFullWorkflow: () => void;
+  onLogout: () => void;
 }
 
 const QUICK_FEATURES = [
@@ -20,12 +21,12 @@ const LRF_FEATURES = [
   "Audit-ready LRF validation trail",
 ];
 
-export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
+export function HomePage({ onQuickCompare, onFullWorkflow, onLogout }: Props) {
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
       {/* Header */}
       <header
-        className="bg-primary text-white px-6 flex items-center shadow-md flex-shrink-0"
+        className="bg-primary text-white px-6 flex items-center justify-between shadow-md flex-shrink-0"
         style={{ minHeight: 52 }}
       >
         <div className="flex items-center gap-2">
@@ -34,6 +35,13 @@ export function HomePage({ onQuickCompare, onFullWorkflow }: Props) {
           <span className="text-white/30 mx-1">|</span>
           <span className="text-xs text-white/70 font-medium">Label proofing reading tool</span>
         </div>
+        <button
+          onClick={onLogout}
+          className="flex items-center gap-1.5 text-xs font-semibold text-white/80 hover:text-white transition-colors"
+        >
+          <LogOut size={14} />
+          Logout
+        </button>
       </header>
 
       {/* Body */}

@@ -2,7 +2,7 @@
 // router/reconcile.py). Mirrors the backend's actual JSON contract — see
 // proofx_backend/CLAUDE.md and align_then_compare.py's `combined` dict.
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://label-comparator-new.azurewebsites.net";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 export interface BackendFinding {
   id: number;
@@ -125,6 +125,60 @@ export interface BulkJobStatus {
   completed: number;
   failed: number;
   results: BulkPairResult[];
+}
+
+// ─── Auth ────────────────────────────────────────────────────────────────────
+
+// The token lives in sessionStorage (scoped to a single tab), NOT localStorage.
+// This enforces one active tab per browser: a second tab starts with no token,
+// is sent to the login screen, and the backend's single-session lock rejects the
+// re-login with 409 — identical to opening the app in another browser. Trade-off:
+// closing the tab drops the local token (the server-side lock frees at expiry or
+// on explicit logout).
+const TOKEN_KEY = "proofx_token";
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+}
+
+/** POST /api/auth/login — exchanges email + password for a JWT and stores it. */
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  const data: LoginResponse = await res.json();
+  sessionStorage.setItem(TOKEN_KEY, data.access_token);
+  return data;
+}
+
+export function getToken(): string | null {
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
+export function isAuthenticated(): boolean {
+  return getToken() !== null;
+}
+
+/** POST /api/auth/logout — releases the single-session lock, then clears the
+ *  local token regardless of the request outcome. */
+export async function logout(): Promise<void> {
+  const token = getToken();
+  try {
+    if (token) {
+      await fetch(`${API_BASE_URL}/api/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    }
+  } catch {
+    // Network error — still clear locally so the user isn't stuck logged in.
+  } finally {
+    sessionStorage.removeItem(TOKEN_KEY);
+  }
 }
 
 async function parseErrorDetail(res: Response): Promise<string> {
