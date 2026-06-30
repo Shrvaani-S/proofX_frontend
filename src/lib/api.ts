@@ -2,7 +2,7 @@
 // router/reconcile.py). Mirrors the backend's actual JSON contract — see
 // proofx_backend/CLAUDE.md and align_then_compare.py's `combined` dict.
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://label-comparator-new.azurewebsites.net";
 
 export interface BackendFinding {
   id: number;
@@ -178,6 +178,27 @@ export async function logout(): Promise<void> {
     // Network error — still clear locally so the user isn't stuck logged in.
   } finally {
     sessionStorage.removeItem(TOKEN_KEY);
+  }
+}
+
+/** Fire-and-forget logout for the page-unload (tab close) path. A normal async
+ *  fetch is abandoned the moment the tab closes, so we use `keepalive` to let the
+ *  request outlive the document. (sendBeacon can't carry the Authorization header
+ *  this endpoint requires.) Unlike `logout()` it deliberately does NOT clear the
+ *  local token: on a true close sessionStorage is discarded anyway, and on a
+ *  refresh that slips past our reload guard the surviving token keeps the user
+ *  signed in locally rather than bouncing them to the login screen. */
+export function logoutBeacon(): void {
+  const token = getToken();
+  if (!token) return;
+  try {
+    fetch(`${API_BASE_URL}/api/auth/logout`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      keepalive: true,
+    });
+  } catch {
+    // Unload path — nothing actionable if the request can't be dispatched.
   }
 }
 

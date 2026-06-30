@@ -3,6 +3,7 @@ import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
 import { LoggedInElsewhere } from "@/pages/LoggedInElsewhere";
 import { useSingleTab } from "@/hooks/use-single-tab";
+import { useLogoutOnClose } from "@/hooks/use-logout-on-close";
 import { LRFPage } from "@/pages/LRFPage";
 import { UploadPage, type UploadedFileNames } from "@/pages/UploadPage";
 import AnalysisProgressModal from "@/components/AnalysisProgressModal";
@@ -19,6 +20,8 @@ type Stage = "home" | "lrf" | "upload" | "processing" | "results";
 export default function App() {
   const [authed, setAuthed] = useState<boolean>(isAuthenticated);
   const tabStatus = useSingleTab(authed);
+  // Log out (release the server single-session lock) when the holder tab closes.
+  useLogoutOnClose(authed && tabStatus === "active");
   const [stage, setStage] = useState<Stage>("home");
   const [lrfData, setLrfData] = useState<LRFData | null>(null);
   const [mode, setMode] = useState<"single" | "bulk">("single");
