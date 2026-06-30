@@ -2,7 +2,7 @@
 // router/reconcile.py). Mirrors the backend's actual JSON contract — see
 // proofx_backend/CLAUDE.md and align_then_compare.py's `combined` dict.
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://label-comparator-new.azurewebsites.net";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 export interface BackendFinding {
   id: number;
@@ -211,6 +211,11 @@ async function parseErrorDetail(res: Response): Promise<string> {
   }
 }
 
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function alignCompare(
   base: File,
   revised: File,
@@ -222,7 +227,11 @@ export async function alignCompare(
   form.append("page", String(opts.page ?? 0));
   form.append("native_resolution", String(opts.nativeResolution ?? false));
 
-  const res = await fetch(`${API_BASE_URL}/api/align-compare`, { method: "POST", body: form });
+  const res = await fetch(`${API_BASE_URL}/api/align-compare`, {
+    method: "POST",
+    body: form,
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error(`align-compare failed: ${await parseErrorDetail(res)}`);
   return res.json();
 }
@@ -238,7 +247,11 @@ export async function startBulkCompare(
   form.append("page", String(opts.page ?? 0));
   form.append("native_resolution", String(opts.nativeResolution ?? false));
 
-  const res = await fetch(`${API_BASE_URL}/api/bulk-compare`, { method: "POST", body: form });
+  const res = await fetch(`${API_BASE_URL}/api/bulk-compare`, {
+    method: "POST",
+    body: form,
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error(`bulk-compare failed: ${await parseErrorDetail(res)}`);
   return res.json();
 }
@@ -262,7 +275,73 @@ export async function reconcile(
     form.append("ref_images", ref.file, ref.name);
   }
 
-  const res = await fetch(`${API_BASE_URL}/api/reconcile`, { method: "POST", body: form });
+  const res = await fetch(`${API_BASE_URL}/api/reconcile`, {
+    method: "POST",
+    body: form,
+    headers: authHeaders(),
+  });
   if (!res.ok) throw new Error(`reconcile failed: ${await parseErrorDetail(res)}`);
   return res.json();
+}
+
+// ── History ───────────────────────────────────────────────────────────────────
+
+export interface HistoryRun {
+  run_id: string;
+  created_at: string;
+  base_name: string;
+  revised_name: string;
+  mode: "single" | "bulk";
+  pair_count: number;
+  findings_count: number | null;
+  workflow: string | null;
+  status: "pass" | "fail";
+}
+
+export interface HistoryResponse {
+  runs: HistoryRun[];
+  count: number;
+}
+
+export async function getHistory(
+  opts: { skip?: number; limit?: number } = {},
+): Promise<HistoryResponse> {
+  const params = new URLSearchParams();
+  if (opts.skip !== undefined) params.set("skip", String(opts.skip));
+  if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+  const res = await fetch(`${API_BASE_URL}/api/history?${params}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`history fetch failed: ${await parseErrorDetail(res)}`);
+  return res.json();
+}
+
+export async function downloadProof(runId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/history/${runId}/proof`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`download failed: ${await parseErrorDetail(res)}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ProofX_Report_${runId}.png`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export async function exportHistoryCSV(): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/history/export/csv`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`history CSV export failed: ${await parseErrorDetail(res)}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  const cd = res.headers.get("content-disposition") ?? "";
+  const match = cd.match(/filename="?([^"]+)"?/);
+  a.download = match ? match[1] : "ProofX_History.csv";
+  a.click();
+  URL.revokeObjectURL(url);
 }

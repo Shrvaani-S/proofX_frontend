@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { HistoryPage } from "@/pages/HistoryPage";
 import { HomePage } from "@/pages/HomePage";
 import { LoginPage } from "@/pages/LoginPage";
 import { LoggedInElsewhere } from "@/pages/LoggedInElsewhere";
@@ -15,7 +16,7 @@ import { buildReconcileLRF, applyReconciliation, type ReconciliationOverrides } 
 import type { LabelPair } from "@/types/label";
 import type { LRFData } from "@/types/lrf";
 
-type Stage = "home" | "lrf" | "upload" | "processing" | "results";
+type Stage = "home" | "history" | "lrf" | "upload" | "processing" | "results";
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean>(isAuthenticated);
@@ -168,8 +169,13 @@ export default function App() {
         onQuickCompare={() => { setLrfData(null); setStage("upload"); }}
         onFullWorkflow={() => setStage("lrf")}
         onLogout={handleLogout}
+        onHistory={() => setStage("history")}
       />
     );
+  }
+
+  if (stage === "history") {
+    return <HistoryPage onBack={() => setStage("home")} />;
   }
 
   if (stage === "lrf") {
