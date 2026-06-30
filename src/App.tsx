@@ -1,10 +1,14 @@
 import { useState } from "react";
 import { HomePage } from "@/pages/HomePage";
+import { LoginPage } from "@/pages/LoginPage";
+import { LoggedInElsewhere } from "@/pages/LoggedInElsewhere";
+import { useSingleTab } from "@/hooks/use-single-tab";
+import { useLogoutOnClose } from "@/hooks/use-logout-on-close";
 import { LRFPage } from "@/pages/LRFPage";
 import { UploadPage, type UploadedFileNames } from "@/pages/UploadPage";
 import AnalysisProgressModal from "@/components/AnalysisProgressModal";
 import { ResultsPage } from "@/pages/ResultsPage";
-import { alignCompare, startBulkCompare, getBulkStatus, reconcile } from "@/lib/api";
+import { alignCompare, startBulkCompare, getBulkStatus, reconcile, isAuthenticated, logout } from "@/lib/api";
 import type { BulkJobStatus } from "@/lib/api";
 import { buildLabelPair } from "@/lib/backendMapping";
 import { buildReconcileLRF, applyReconciliation, type ReconciliationOverrides } from "@/lib/lrfReconcile";
@@ -14,6 +18,10 @@ import type { LRFData } from "@/types/lrf";
 type Stage = "home" | "lrf" | "upload" | "processing" | "results";
 
 export default function App() {
+  const [authed, setAuthed] = useState<boolean>(isAuthenticated);
+  const tabStatus = useSingleTab(authed);
+  // Log out (release the server single-session lock) when the holder tab closes.
+  useLogoutOnClose(authed && tabStatus === "active");
   const [stage, setStage] = useState<Stage>("home");
   const [lrfData, setLrfData] = useState<LRFData | null>(null);
   const [mode, setMode] = useState<"single" | "bulk">("single");
@@ -136,11 +144,30 @@ export default function App() {
     }
   };
 
+  const handleLogout = async () => {
+    await logout();
+    setAuthed(false);
+    setStage("home");
+  };
+
+  // Single active tab per browser: a second tab/window is blocked outright.
+  if (tabStatus === "blocked") {
+    return <LoggedInElsewhere />;
+  }
+  if (tabStatus === "checking") {
+    return null; // brief (<=250ms) probe window; avoids a flash of the wrong screen
+  }
+
+  if (!authed) {
+    return <LoginPage onSuccess={() => setAuthed(true)} />;
+  }
+
   if (stage === "home") {
     return (
       <HomePage
         onQuickCompare={() => { setLrfData(null); setStage("upload"); }}
         onFullWorkflow={() => setStage("lrf")}
+        onLogout={handleLogout}
       />
     );
   }
