@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { ScanLine, ArrowLeft, Download, Clock } from "lucide-react";
-import { getHistory, exportHistoryCSV } from "@/lib/api";
+import { getHistory, exportHistoryCSV, workflowDisplayName } from "@/lib/api";
 import type { HistoryRun } from "@/lib/api";
 
 interface Props {
@@ -156,7 +156,7 @@ function HistoryRow({ run }: { run: HistoryRun }) {
         {run.findings_count ?? <span className="text-muted-foreground">—</span>}
       </td>
       <td className="px-4 py-3">
-        {run.workflow ? <WorkflowBadge workflow={run.workflow} /> : <span className="text-muted-foreground text-xs">—</span>}
+        <WorkflowBadge workflow={run.workflow} />
       </td>
       <td className="px-4 py-3">
         <StatusBadge status={run.status} />
@@ -194,13 +194,13 @@ function ModeBadge({ mode }: { mode: "single" | "bulk" }) {
   );
 }
 
-function WorkflowBadge({ workflow }: { workflow: string }) {
+function WorkflowBadge({ workflow }: { workflow: string | null }) {
   return (
     <span
       className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border"
       style={{ color: "#1C2E59", borderColor: "#1C2E5940", backgroundColor: "#1C2E5908" }}
     >
-      {workflow}
+      {workflowDisplayName(workflow)}
     </span>
   );
 }

@@ -255,3 +255,23 @@ describe("exportHistoryCSV", () => {
     await expect(exportHistoryCSV()).rejects.toThrow("offline");
   });
 });
+
+// ─── workflowDisplayName ─────────────────────────────────────────────────────
+
+describe("workflowDisplayName", () => {
+  it("maps null (pre-rename rows) to Visual Comparison", async () => {
+    const { workflowDisplayName } = await import("./api");
+    expect(workflowDisplayName(null)).toBe("Visual Comparison");
+  });
+
+  it("maps legacy 'LRF' to Proof Reading", async () => {
+    const { workflowDisplayName } = await import("./api");
+    expect(workflowDisplayName("LRF")).toBe("Proof Reading");
+  });
+
+  it("passes through current values unchanged", async () => {
+    const { workflowDisplayName } = await import("./api");
+    expect(workflowDisplayName("Visual Comparison")).toBe("Visual Comparison");
+    expect(workflowDisplayName("Proof Reading")).toBe("Proof Reading");
+  });
+});

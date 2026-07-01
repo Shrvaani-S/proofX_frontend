@@ -303,6 +303,16 @@ export interface HistoryResponse {
   count: number;
 }
 
+// Backend now stamps "Visual Comparison" / "Proof Reading" on new runs, but
+// rows created before that rename may still carry the old null / "LRF"
+// values — map those to the current product naming so old history rows
+// still render sensibly.
+export function workflowDisplayName(workflow: string | null): string {
+  if (workflow === null) return "Visual Comparison";
+  if (workflow === "LRF") return "Proof Reading";
+  return workflow;
+}
+
 export async function getHistory(
   opts: { skip?: number; limit?: number } = {},
 ): Promise<HistoryResponse> {

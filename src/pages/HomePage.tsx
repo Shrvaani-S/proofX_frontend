@@ -9,7 +9,7 @@ import {
   Download,
   Clock,
 } from "lucide-react";
-import { getHistory, exportHistoryCSV, downloadProof } from "@/lib/api";
+import { getHistory, exportHistoryCSV, downloadProof, workflowDisplayName } from "@/lib/api";
 import type { HistoryRun } from "@/lib/api";
 
 interface Props {
@@ -371,10 +371,11 @@ function ModeBadge({ mode }: { mode: "single" | "bulk" }) {
 }
 
 function WorkflowBadge({ workflow }: { workflow: string | null }) {
-  if (!workflow) {
+  const label = workflowDisplayName(workflow);
+  if (label === "Visual Comparison") {
     return (
       <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-surface-2 text-muted-foreground border border-border">
-        Quick
+        {label}
       </span>
     );
   }
@@ -383,7 +384,7 @@ function WorkflowBadge({ workflow }: { workflow: string | null }) {
       className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border"
       style={{ color: "#1C2E59", borderColor: "#1C2E5940", backgroundColor: "#1C2E5908" }}
     >
-      {workflow}
+      {label}
     </span>
   );
 }
