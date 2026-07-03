@@ -148,6 +148,15 @@ export default function App() {
         // reading (PDF.js) differed from what the backend computed.
         setBulkProgress({ completed: 0, total: backendTotal });
         const POLL_MS = 2000;
+        // getBulkStatus's response grows every poll (it re-sends every
+        // completed result's base64 images, not just new ones since the
+        // last poll), so a single transient truncated/dropped response —
+        // a proxy hiccup, a dev-server reload, a flaky connection — becomes
+        // more likely the longer a bulk run goes. Tolerate a few consecutive
+        // failures before giving up, rather than discarding an otherwise
+        // near-complete run over one bad poll.
+        const MAX_CONSECUTIVE_POLL_FAILURES = 3;
+        let consecutivePollFailures = 0;
         // Bump the generation so any previous stale poll callbacks are ignored.
         pollGenerationRef.current += 1;
         const myGeneration = pollGenerationRef.current;
@@ -158,6 +167,7 @@ export default function App() {
             try {
               const status = await getBulkStatus(job_id);
               if (pollGenerationRef.current !== myGeneration) return;
+              consecutivePollFailures = 0;
               setBulkProgress({ completed: status.completed + status.failed, total: status.total });
               if (status.status === "done") {
                 resolve(status);
@@ -166,7 +176,12 @@ export default function App() {
               }
             } catch (err) {
               if (pollGenerationRef.current !== myGeneration) return;
-              reject(err);
+              consecutivePollFailures += 1;
+              if (consecutivePollFailures >= MAX_CONSECUTIVE_POLL_FAILURES) {
+                reject(err);
+              } else {
+                setTimeout(poll, POLL_MS);
+              }
             }
           };
           setTimeout(poll, POLL_MS);
