@@ -5,7 +5,7 @@
 
 import type { Category, Finding, LabelPair } from "@/types/label";
 import { CAT_PREFIX } from "@/constants";
-import type { AlignCompareResponse, BackendFinding } from "@/lib/api";
+import type { AlignCompareResponse, BackendFinding, HistoryReport } from "@/lib/api";
 
 const CATEGORY_BY_BACKEND_TYPE: Record<BackendFinding["type"], Category> = {
   text: "text",
@@ -69,6 +69,52 @@ export function buildLabelPair(
     revisedVersion: "revised",
     masterUrl: `data:image/png;base64,${response.base_image_png_base64}`,
     revisedUrl: `data:image/png;base64,${response.revised_image_png_base64}`,
+    findings,
+    width,
+    height,
+  };
+
+  return { pair, idMap };
+}
+
+/** exportPDF() (ExportModal.tsx) decides how to resolve `masterUrl`/`revisedUrl`
+ *  purely from the *filename's* extension (isPdf(pair.masterName)) — for a live
+ *  comparison that's safe because masterUrl/revisedUrl are always the rendered
+ *  post-alignment PNGs, never the raw upload, and a `.pdf`-named live pair is
+ *  always the *active* pair with a real card ref to fall back on if the PDF
+ *  branch is (wrongly) taken. Neither is true for a reconstructed history
+ *  report — there's no DOM to fall back to — so a `.pdf`-named run would
+ *  silently lose its images. Swap the extension so isPdf() always sees a
+ *  non-PDF name; only affects export display, matches what the data actually is. */
+function imageSafeName(name: string): string {
+  return name.replace(/\.pdf$/i, ".png");
+}
+
+/** Same 1:1 reshape as buildLabelPair, sourced from GET /api/history/{run_id}/report
+ *  instead of a live AlignCompareResponse — lets the history table's "Download
+ *  Report" button reuse the exact same exportPDF() the results page uses,
+ *  without re-running alignment. */
+export function buildLabelPairFromReport(
+  id: string,
+  masterName: string,
+  revisedName: string,
+  report: HistoryReport,
+): { pair: LabelPair; idMap: Record<number, string> } {
+  const { findings, idMap } = mapFindings(report.findings_report.findings);
+  const [width, height] = report.findings_report.dimensions;
+
+  const safeMasterName = imageSafeName(masterName);
+  const safeRevisedName = imageSafeName(revisedName);
+
+  const pair: LabelPair = {
+    id,
+    name: safeMasterName.replace(/\.[^/.]+$/, ""),
+    masterName: safeMasterName,
+    revisedName: safeRevisedName,
+    masterVersion: "base",
+    revisedVersion: "revised",
+    masterUrl: `data:image/png;base64,${report.base_image_png_base64}`,
+    revisedUrl: `data:image/png;base64,${report.revised_image_png_base64}`,
     findings,
     width,
     height,

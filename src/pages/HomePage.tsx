@@ -9,8 +9,9 @@ import {
   Download,
   Clock,
 } from "lucide-react";
-import { getHistory, exportHistoryCSV, downloadProof, workflowDisplayName } from "@/lib/api";
+import { getHistory, exportHistoryCSV } from "@/lib/api";
 import type { HistoryRun } from "@/lib/api";
+import { HistoryTable } from "@/components/HistoryTable";
 
 interface Props {
   onQuickCompare: () => void;
@@ -127,7 +128,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow, onLogout, onHistory }
         </div>
 
         {/* Recent Runs section */}
-        <div className="px-6 pb-10 w-full max-w-5xl mx-auto">
+        <div className="px-6 pb-10 w-full max-w-7xl mx-auto">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-base font-bold text-foreground tracking-tight">Recent Runs</h2>
             <div className="flex items-center gap-3">
@@ -170,29 +171,7 @@ export function HomePage({ onQuickCompare, onFullWorkflow, onLogout, onHistory }
           )}
 
           {!historyLoading && !historyError && runs.length > 0 && (
-            <div className="bg-white border border-border rounded-lg overflow-hidden shadow-sm">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border bg-surface-2">
-                    {["Date / Time", "Master", "Revised", "Mode", "Pairs", "Findings", "Workflow", "Status", ""].map(
-                      (col) => (
-                        <th
-                          key={col}
-                          className="px-4 py-2.5 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap"
-                        >
-                          {col}
-                        </th>
-                      ),
-                    )}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {runs.map((run) => (
-                    <HistoryRow key={run.run_id} run={run} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <HistoryTable runs={runs} compact />
           )}
         </div>
       </main>
@@ -272,135 +251,3 @@ function WorkflowCard({
   );
 }
 
-// ─── HistoryRow ──────────────────────────────────────────────────────────────
-
-function HistoryRow({ run }: { run: HistoryRun }) {
-  const [downloading, setDownloading] = useState(false);
-  const [dlError, setDlError] = useState<string | null>(null);
-
-  const handleDownload = async () => {
-    setDownloading(true);
-    setDlError(null);
-    try {
-      await downloadProof(run.run_id);
-    } catch (err) {
-      setDlError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setDownloading(false);
-    }
-  };
-
-  return (
-    <tr className="hover:bg-surface-2/50 transition-colors">
-      <td className="px-4 py-2.5 text-xs text-muted-foreground whitespace-nowrap">
-        {formatDate(run.created_at)}
-      </td>
-      <td
-        className="px-4 py-2.5 text-xs font-medium text-foreground max-w-[140px] truncate"
-        title={run.base_name}
-      >
-        {run.base_name}
-      </td>
-      <td
-        className="px-4 py-2.5 text-xs font-medium text-foreground max-w-[140px] truncate"
-        title={run.revised_name}
-      >
-        {run.revised_name}
-      </td>
-      <td className="px-4 py-2.5">
-        <ModeBadge mode={run.mode} />
-      </td>
-      <td className="px-4 py-2.5 text-xs text-center text-foreground">{run.pair_count}</td>
-      <td className="px-4 py-2.5 text-xs text-center text-foreground">
-        {run.findings_count ?? <span className="text-muted-foreground">—</span>}
-      </td>
-      <td className="px-4 py-2.5">
-        <WorkflowBadge workflow={run.workflow} />
-      </td>
-      <td className="px-4 py-2.5">
-        <StatusBadge status={run.status} />
-      </td>
-      <td className="px-4 py-2.5 text-right whitespace-nowrap">
-        {run.status === "pass" && run.mode === "single" ? (
-          <div className="flex flex-col items-end gap-1">
-            <button
-              onClick={handleDownload}
-              disabled={downloading}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider rounded bg-primary text-white hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              <Download size={11} />
-              {downloading ? "Downloading…" : "Download Report"}
-            </button>
-            {dlError && <span className="text-[10px] text-red-500">{dlError}</span>}
-          </div>
-        ) : (
-          <span className="text-muted-foreground text-xs">—</span>
-        )}
-      </td>
-    </tr>
-  );
-}
-
-// ─── Badges ──────────────────────────────────────────────────────────────────
-
-function StatusBadge({ status }: { status: "pass" | "fail" }) {
-  return status === "pass" ? (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
-      Pass
-    </span>
-  ) : (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-red-50 text-red-600 border border-red-200">
-      Fail
-    </span>
-  );
-}
-
-function ModeBadge({ mode }: { mode: "single" | "bulk" }) {
-  return mode === "bulk" ? (
-    <span
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border"
-      style={{ color: "#F07922", borderColor: "#F0792240", backgroundColor: "#F0792208" }}
-    >
-      Bulk
-    </span>
-  ) : (
-    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-surface-2 text-muted-foreground border border-border">
-      Single
-    </span>
-  );
-}
-
-function WorkflowBadge({ workflow }: { workflow: string | null }) {
-  const label = workflowDisplayName(workflow);
-  if (label === "Visual Comparison") {
-    return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-surface-2 text-muted-foreground border border-border">
-        {label}
-      </span>
-    );
-  }
-  return (
-    <span
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border"
-      style={{ color: "#1C2E59", borderColor: "#1C2E5940", backgroundColor: "#1C2E5908" }}
-    >
-      {label}
-    </span>
-  );
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatDate(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-}

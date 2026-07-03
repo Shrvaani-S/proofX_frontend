@@ -101,10 +101,15 @@ export interface ReconcileReport {
 
 // ── Bulk compare types ────────────────────────────────────────────────────
 
+// Each uploaded file may itself be a multi-page PDF (one label per page), so
+// a single uploaded pair (file_index) can expand into several results, one
+// per page_index. page_index is null only for a skipped (mismatched) pair,
+// which never reaches per-page comparison at all.
 export interface BulkPairResult {
-  index: number;
-  run_id: string;
-  status: "done" | "error";
+  file_index: number;
+  page_index: number | null;
+  run_id: string | null;
+  status: "done" | "error" | "skipped_page_mismatch";
   base_name: string;
   revised_name: string;
   // Present when status === "done"
@@ -116,6 +121,10 @@ export interface BulkPairResult {
   revised_image_png_base64?: string;
   // Present when status === "error"
   error?: string;
+  // Present when status === "skipped_page_mismatch"
+  base_pages?: number;
+  revised_pages?: number;
+  reason?: string;
 }
 
 export interface BulkJobStatus {
@@ -124,7 +133,14 @@ export interface BulkJobStatus {
   total: number;
   completed: number;
   failed: number;
+  skipped: number;
   results: BulkPairResult[];
+}
+
+export interface BulkCompareStartResponse {
+  job_id: string;
+  total: number;
+  skipped: number;
 }
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
@@ -236,16 +252,24 @@ export async function alignCompare(
   return res.json();
 }
 
+/** POST /api/bulk-compare. Each base/revised file may be a multi-page PDF —
+ *  every page is compared against the same-index page on the other side.
+ *
+ *  The backend can pause a batch for confirmation when a base/revised pair's
+ *  page counts don't match (`confirmSkip: false`), but this client always
+ *  sends `confirmSkip: true` — any mismatched pair is silently skipped
+ *  (never compared, reported back in the job's `skipped` count) and every
+ *  other pair runs normally, with no separate confirmation step. */
 export async function startBulkCompare(
   bases: File[],
   reviseds: File[],
-  opts: { page?: number; nativeResolution?: boolean } = {},
-): Promise<{ job_id: string; total: number }> {
+  opts: { nativeResolution?: boolean; confirmSkip?: boolean } = {},
+): Promise<BulkCompareStartResponse> {
   const form = new FormData();
   for (const f of bases) form.append("bases", f);
   for (const f of reviseds) form.append("reviseds", f);
-  form.append("page", String(opts.page ?? 0));
   form.append("native_resolution", String(opts.nativeResolution ?? false));
+  form.append("confirm_skip", String(opts.confirmSkip ?? false));
 
   const res = await fetch(`${API_BASE_URL}/api/bulk-compare`, {
     method: "POST",
@@ -286,6 +310,12 @@ export async function reconcile(
 
 // ── History ───────────────────────────────────────────────────────────────────
 
+export interface HistoryFilePair {
+  base_name: string;
+  revised_name: string;
+  status: "done" | "error" | "skipped_page_mismatch";
+}
+
 export interface HistoryRun {
   run_id: string;
   created_at: string;
@@ -293,9 +323,25 @@ export interface HistoryRun {
   revised_name: string;
   mode: "single" | "bulk";
   pair_count: number;
+  analysed_pair_count: number;
+  skipped_count: number;
+  file_pairs: HistoryFilePair[] | null;
   findings_count: number | null;
   workflow: string | null;
   status: "pass" | "fail";
+}
+
+// GET /api/history/{run_id}/report — everything needed to rebuild a
+// LabelPair and re-run the same exportPDF() the results page uses, without
+// re-running alignment. Only ever populated for single-mode passing runs.
+export interface HistoryReport {
+  run_id: string;
+  base_name: string;
+  revised_name: string;
+  findings_report: ComparisonReport;
+  base_image_png_base64: string;
+  revised_image_png_base64: string;
+  reconcile_report: ReconcileReport | null;
 }
 
 export interface HistoryResponse {
@@ -323,6 +369,14 @@ export async function getHistory(
     headers: authHeaders(),
   });
   if (!res.ok) throw new Error(`history fetch failed: ${await parseErrorDetail(res)}`);
+  return res.json();
+}
+
+export async function getHistoryReport(runId: string): Promise<HistoryReport> {
+  const res = await fetch(`${API_BASE_URL}/api/history/${runId}/report`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error(`report fetch failed: ${await parseErrorDetail(res)}`);
   return res.json();
 }
 

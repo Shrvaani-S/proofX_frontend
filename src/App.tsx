@@ -67,16 +67,25 @@ export default function App() {
       return;
     }
 
-    // ── Bulk path: POST once, poll until done ──────────────────────────────
+    // ── Bulk path: POST once, poll until done ───────────────────────────────
+    await startBulkFlow(files);
+  };
+
+  // Any page-count-mismatched pair is always skipped (never compared, never
+  // blocks the rest of the batch) — confirmSkip is passed upfront so this is
+  // a single request/poll cycle with no separate confirmation step.
+  const startBulkFlow = async (files: UploadedFileNames) => {
+    setStage("processing");
+    setRunError(null);
     try {
-      const { job_id } = await startBulkCompare(files.masterFiles, files.revisedFiles);
-      setBulkProgress({ completed: 0, total: count });
+      const startResp = await startBulkCompare(files.masterFiles, files.revisedFiles, { confirmSkip: true });
+      setBulkProgress({ completed: 0, total: startResp.total });
 
       const POLL_MS = 2000;
       const finalStatus = await new Promise<BulkJobStatus>((resolve, reject) => {
         const poll = async () => {
           try {
-            const status = await getBulkStatus(job_id);
+            const status = await getBulkStatus(startResp.job_id);
             setBulkProgress({ completed: status.completed + status.failed, total: status.total });
             if (status.status === "done") {
               resolve(status);
@@ -93,23 +102,40 @@ export default function App() {
       const nextPairs: LabelPair[] = [];
       const nextReconciliation: Record<string, ReconciliationOverrides> = {};
       const errors: string[] = [];
+      const skipped: string[] = [];
 
       const { lrf: reconcileLrf, refImages } = lrfData
         ? buildReconcileLRF(lrfData, lrfData.metadata.crNumber || "LRF")
         : { lrf: null, refImages: [] };
 
+      // A file with more than one result page gets "(page N)" appended to
+      // its displayed name so multi-page labels are distinguishable; a
+      // single-page file (the common case) is shown exactly as before.
+      const pagesPerFile = new Map<number, number>();
       for (const result of finalStatus.results) {
+        if (result.status === "skipped_page_mismatch") continue;
+        pagesPerFile.set(result.file_index, (pagesPerFile.get(result.file_index) ?? 0) + 1);
+      }
+
+      for (const result of finalStatus.results) {
+        if (result.status === "skipped_page_mismatch") {
+          skipped.push(`${result.base_name} vs ${result.revised_name}: ${result.reason ?? "page count mismatch"}`);
+          continue;
+        }
         if (result.status === "error" || !result.combined_report) {
           errors.push(`${result.base_name}: ${result.error ?? "unknown error"}`);
           continue;
         }
-        const pairId = `p${result.index + 1}`;
+        const pageIdx = result.page_index ?? 0;
+        const isMultiPage = (pagesPerFile.get(result.file_index) ?? 1) > 1;
+        const pageSuffix = isMultiPage ? ` (page ${pageIdx + 1})` : "";
+        const pairId = `p${result.file_index + 1}-${pageIdx + 1}`;
         const { pair, idMap } = buildLabelPair(
           pairId,
-          result.base_name,
-          result.revised_name,
+          result.base_name + pageSuffix,
+          result.revised_name + pageSuffix,
           {
-            run_id: result.run_id,
+            run_id: result.run_id ?? "",
             combined_report: result.combined_report,
             notes: result.notes ?? [],
             comparison_inputs: result.comparison_inputs ?? "full_page",
@@ -120,14 +146,14 @@ export default function App() {
         );
         nextPairs.push(pair);
 
-        if (reconcileLrf) {
+        if (reconcileLrf && result.run_id) {
           const report = await reconcile(result.run_id, reconcileLrf, { refImages });
           nextReconciliation[pairId] = applyReconciliation(report, idMap);
         }
       }
 
-      if (nextPairs.length === 0 && errors.length > 0) {
-        throw new Error(errors.join("; "));
+      if (nextPairs.length === 0 && (errors.length > 0 || skipped.length > 0)) {
+        throw new Error([...skipped, ...errors].join("; "));
       }
 
       setPairs(nextPairs);
@@ -135,9 +161,10 @@ export default function App() {
       setBulkProgress(null);
       setStage("results");
 
-      if (errors.length > 0) {
-        setRunError(`${errors.length} pair(s) failed: ${errors.join("; ")}`);
-      }
+      const issues: string[] = [];
+      if (skipped.length > 0) issues.push(`${skipped.length} pair(s) skipped: ${skipped.join("; ")}`);
+      if (errors.length > 0) issues.push(`${errors.length} pair(s) failed: ${errors.join("; ")}`);
+      if (issues.length > 0) setRunError(issues.join(" | "));
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
       setBulkProgress(null);

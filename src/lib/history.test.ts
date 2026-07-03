@@ -256,6 +256,60 @@ describe("exportHistoryCSV", () => {
   });
 });
 
+// ─── getHistoryReport ────────────────────────────────────────────────────────
+
+describe("getHistoryReport", () => {
+  it("fetches /api/history/{run_id}/report and returns the full report", async () => {
+    const payload = {
+      run_id: "abc123",
+      base_name: "master.pdf",
+      revised_name: "revised.pdf",
+      findings_report: { pair_id: "p1", dimensions: [100, 200], dpi: 300, summary: { total: 1, by_type: {}, low_confidence_count: 0 }, findings: [] },
+      base_image_png_base64: "AAAA",
+      revised_image_png_base64: "BBBB",
+      reconcile_report: null,
+    };
+    mockFetch(200, payload);
+
+    const { getHistoryReport } = await import("./api");
+    const result = await getHistoryReport("abc123");
+
+    expect(result.run_id).toBe("abc123");
+    expect(result.findings_report.findings).toEqual([]);
+    expect(result.reconcile_report).toBeNull();
+  });
+
+  it("includes Authorization header with stored token", async () => {
+    mockFetch(200, {
+      run_id: "abc123", base_name: "m.pdf", revised_name: "r.pdf",
+      findings_report: { findings: [] }, base_image_png_base64: "", revised_image_png_base64: "",
+      reconcile_report: null,
+    });
+    const { getHistoryReport } = await import("./api");
+    await getHistoryReport("abc123");
+
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect((options.headers as Record<string, string>)["Authorization"]).toBe(
+      `Bearer ${FAKE_TOKEN}`,
+    );
+  });
+
+  it("throws on 404 when the run has no persisted full report", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        statusText: "Not Found",
+        json: () => Promise.resolve({ detail: "Full report not found for this run." }),
+      }),
+    );
+    const { getHistoryReport } = await import("./api");
+    await expect(getHistoryReport("old-run")).rejects.toThrow("Full report not found for this run.");
+  });
+});
+
 // ─── workflowDisplayName ─────────────────────────────────────────────────────
 
 describe("workflowDisplayName", () => {
