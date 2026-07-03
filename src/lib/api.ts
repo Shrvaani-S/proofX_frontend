@@ -2,6 +2,10 @@
 // router/reconcile.py). Mirrors the backend's actual JSON contract — see
 // proofx_backend/CLAUDE.md and align_then_compare.py's `combined` dict.
 
+// Fail early in production builds if the API URL is not configured.
+if (import.meta.env.PROD && !import.meta.env.VITE_API_BASE_URL) {
+  throw new Error("[ProofX] VITE_API_BASE_URL is not set. Configure it in your .env file before building for production.");
+}
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 export interface BackendFinding {
@@ -101,15 +105,19 @@ export interface ReconcileReport {
 
 // ── Bulk compare types ────────────────────────────────────────────────────
 
-// Each uploaded file may itself be a multi-page PDF (one label per page), so
-// a single uploaded pair (file_index) can expand into several results, one
-// per page_index. page_index is null only for a skipped (mismatched) pair,
-// which never reaches per-page comparison at all.
+export interface BulkPageMismatch {
+  index: number;
+  base_name: string;
+  revised_name: string;
+  base_pages: number;
+  revised_pages: number;
+}
+
 export interface BulkPairResult {
   file_index: number;
   page_index: number | null;
-  run_id: string | null;
-  status: "done" | "error" | "skipped_page_mismatch";
+  run_id: string;
+  status: "done" | "error";
   base_name: string;
   revised_name: string;
   // Present when status === "done"
@@ -218,6 +226,12 @@ export function logoutBeacon(): void {
   }
 }
 
+/** Clears the local token and dispatches an event so the UI can redirect to login. */
+function handleUnauthorized(): void {
+  sessionStorage.removeItem(TOKEN_KEY);
+  window.dispatchEvent(new CustomEvent("proofx:unauthorized"));
+}
+
 async function parseErrorDetail(res: Response): Promise<string> {
   try {
     const body = await res.json();
@@ -225,6 +239,50 @@ async function parseErrorDetail(res: Response): Promise<string> {
   } catch {
     return res.statusText;
   }
+}
+
+/** POST via XHR so we can fire `onUploadDone` the moment the request body
+ *  has been fully sent (before the server responds). */
+function xhrPost<T>(
+  url: string,
+  form: FormData,
+  opts?: { onUploadDone?: () => void; headers?: Record<string, string> },
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    if (opts?.headers) {
+      for (const [k, v] of Object.entries(opts.headers)) {
+        xhr.setRequestHeader(k, v);
+      }
+    }
+    if (opts?.onUploadDone) {
+      xhr.upload.addEventListener("load", opts.onUploadDone);
+    }
+    xhr.onload = () => {
+      if (xhr.status === 401) {
+        handleUnauthorized();
+        reject(new Error("Session expired. Please log in again."));
+        return;
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as T);
+        } catch {
+          reject(new Error("Failed to parse response"));
+        }
+      } else {
+        let detail = xhr.statusText;
+        try {
+          const body = JSON.parse(xhr.responseText) as { detail?: string };
+          detail = body.detail ?? xhr.statusText;
+        } catch {}
+        reject(new Error(detail));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.send(form);
+  });
 }
 
 function authHeaders(): Record<string, string> {
@@ -235,7 +293,7 @@ function authHeaders(): Record<string, string> {
 export async function alignCompare(
   base: File,
   revised: File,
-  opts: { page?: number; nativeResolution?: boolean } = {},
+  opts: { page?: number; nativeResolution?: boolean; onUploadDone?: () => void } = {},
 ): Promise<AlignCompareResponse> {
   const form = new FormData();
   form.append("base", base);
@@ -243,46 +301,50 @@ export async function alignCompare(
   form.append("page", String(opts.page ?? 0));
   form.append("native_resolution", String(opts.nativeResolution ?? false));
 
-  const res = await fetch(`${API_BASE_URL}/api/align-compare`, {
-    method: "POST",
-    body: form,
-    headers: authHeaders(),
-  });
-  if (!res.ok) throw new Error(`align-compare failed: ${await parseErrorDetail(res)}`);
-  return res.json();
+  try {
+    return await xhrPost<AlignCompareResponse>(`${API_BASE_URL}/api/align-compare`, form, {
+      onUploadDone: opts.onUploadDone,
+      headers: authHeaders(),
+    });
+  } catch (err) {
+    throw new Error(`align-compare failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
-/** POST /api/bulk-compare. Each base/revised file may be a multi-page PDF —
- *  every page is compared against the same-index page on the other side.
- *
- *  The backend can pause a batch for confirmation when a base/revised pair's
- *  page counts don't match (`confirmSkip: false`), but this client always
- *  sends `confirmSkip: true` — any mismatched pair is silently skipped
- *  (never compared, reported back in the job's `skipped` count) and every
- *  other pair runs normally, with no separate confirmation step. */
+export type BulkCompareResponse =
+  | { job_id: string; total: number; skipped?: number }
+  | { status: "needs_confirmation"; mismatches: BulkPageMismatch[] };
+
 export async function startBulkCompare(
   bases: File[],
   reviseds: File[],
-  opts: { nativeResolution?: boolean; confirmSkip?: boolean } = {},
-): Promise<BulkCompareStartResponse> {
+  opts: { page?: number; nativeResolution?: boolean; onUploadDone?: () => void; confirmSkip?: boolean } = {},
+): Promise<BulkCompareResponse> {
   const form = new FormData();
   for (const f of bases) form.append("bases", f);
   for (const f of reviseds) form.append("reviseds", f);
   form.append("native_resolution", String(opts.nativeResolution ?? false));
   form.append("confirm_skip", String(opts.confirmSkip ?? false));
 
-  const res = await fetch(`${API_BASE_URL}/api/bulk-compare`, {
-    method: "POST",
-    body: form,
-    headers: authHeaders(),
-  });
-  if (!res.ok) throw new Error(`bulk-compare failed: ${await parseErrorDetail(res)}`);
-  return res.json();
+  try {
+    return await xhrPost<BulkCompareResponse>(`${API_BASE_URL}/api/bulk-compare`, form, {
+      onUploadDone: opts.onUploadDone,
+      headers: authHeaders(),
+    });
+  } catch (err) {
+    throw new Error(`bulk-compare failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export async function getBulkStatus(jobId: string): Promise<BulkJobStatus> {
-  const res = await fetch(`${API_BASE_URL}/api/bulk-status/${jobId}`);
-  if (!res.ok) throw new Error(`bulk-status failed: ${await parseErrorDetail(res)}`);
+  const res = await fetch(`${API_BASE_URL}/api/bulk-status/${jobId}`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    const detail = await res.text().catch(() => res.statusText);
+    throw new Error(`bulk-status failed: ${detail}`);
+  }
   return res.json();
 }
 
@@ -304,7 +366,10 @@ export async function reconcile(
     body: form,
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`reconcile failed: ${await parseErrorDetail(res)}`);
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`reconcile failed: ${await parseErrorDetail(res)}`);
+  }
   return res.json();
 }
 
@@ -368,7 +433,10 @@ export async function getHistory(
   const res = await fetch(`${API_BASE_URL}/api/history?${params}`, {
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`history fetch failed: ${await parseErrorDetail(res)}`);
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`history fetch failed: ${await parseErrorDetail(res)}`);
+  }
   return res.json();
 }
 
@@ -384,7 +452,10 @@ export async function downloadProof(runId: string): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/api/history/${runId}/proof`, {
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`download failed: ${await parseErrorDetail(res)}`);
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`download failed: ${await parseErrorDetail(res)}`);
+  }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -398,7 +469,10 @@ export async function exportHistoryCSV(): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/api/history/export/csv`, {
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`history CSV export failed: ${await parseErrorDetail(res)}`);
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`history CSV export failed: ${await parseErrorDetail(res)}`);
+  }
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");

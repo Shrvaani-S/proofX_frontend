@@ -12,7 +12,8 @@
       "Bash(cp components/ResultsScreen.tsx pages/ResultsPage.tsx)",
       "Bash(cp components/ExportModal.tsx report/ExportModal.tsx)",
       "Bash(cp styles.css index.css)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(xargs grep:*)"
     ]
   }
 }

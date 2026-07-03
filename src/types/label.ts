@@ -31,4 +31,7 @@ export interface LabelPair {
    *  space. Falls back to LABEL_W/LABEL_H (mock data) when absent. */
   width?: number;
   height?: number;
+  /** True when the backend flagged this pair for a variable shift in alignment.
+   *  The pair is still shown in results but findings may be unreliable. */
+  alignmentFlagged?: boolean;
 }

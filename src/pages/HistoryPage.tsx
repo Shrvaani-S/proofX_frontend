@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
-import { ScanLine, ArrowLeft, Download, Clock } from "lucide-react";
-import { getHistory, exportHistoryCSV } from "@/lib/api";
+import { ScanLine, ArrowLeft, Download, Clock, Loader2 } from "lucide-react";
+import { getHistory, exportHistoryCSV, downloadProof, workflowDisplayName } from "@/lib/api";
 import type { HistoryRun } from "@/lib/api";
 import { HistoryTable } from "@/components/HistoryTable";
 
@@ -94,7 +94,37 @@ export function HistoryPage({ onBack }: Props) {
         )}
 
         {!loading && !error && runs.length > 0 && (
-          <HistoryTable runs={runs} />
+          <div className="bg-white border border-border rounded-lg overflow-hidden shadow-sm">
+            <table className="w-full text-sm min-w-[700px]">
+              <thead>
+                <tr className="border-b border-border bg-surface-2">
+                  {[
+                    "Date / Time",
+                    "Master",
+                    "Revised",
+                    "Mode",
+                    "Pairs",
+                    "Findings",
+                    "Workflow",
+                    "Status",
+                    "",
+                  ].map((col) => (
+                    <th
+                      key={col}
+                      className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap"
+                    >
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {runs.map((run) => (
+                  <HistoryRow key={run.run_id} run={run} />
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </main>
 
@@ -106,3 +136,130 @@ export function HistoryPage({ onBack }: Props) {
   );
 }
 
+// ─── Row ────────────────────────────────────────────────────────────────────
+
+function HistoryRow({ run }: { run: HistoryRun }) {
+  const dateLabel = formatDate(run.created_at);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
+  const canDownload = run.mode === "single";
+
+  const handleDownload = async () => {
+    if (!canDownload || downloading) return;
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadProof(run.run_id);
+    } catch (err) {
+      setDownloadError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <tr className="hover:bg-surface-2/50 transition-colors">
+      <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{dateLabel}</td>
+      <td className="px-4 py-3 text-xs font-medium text-foreground max-w-[160px] truncate" title={run.base_name ?? undefined}>
+        {run.base_name || "—"}
+      </td>
+      <td className="px-4 py-3 text-xs font-medium text-foreground max-w-[160px] truncate" title={run.revised_name ?? undefined}>
+        {run.revised_name || "—"}
+      </td>
+      <td className="px-4 py-3">
+        <ModeBadge mode={run.mode} />
+      </td>
+      <td className="px-4 py-3 text-xs text-center text-foreground">{run.pair_count}</td>
+      <td className="px-4 py-3 text-xs text-center text-foreground">
+        {run.findings_count ?? <span className="text-muted-foreground">—</span>}
+      </td>
+      <td className="px-4 py-3">
+        <WorkflowBadge workflow={run.workflow} />
+      </td>
+      <td className="px-4 py-3">
+        <StatusBadge status={run.status} />
+      </td>
+      <td className="px-4 py-3">
+        <button
+          onClick={handleDownload}
+          disabled={!canDownload || downloading}
+          title={canDownload ? "Download proof report" : "Not available for bulk runs"}
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded text-[11px] font-semibold transition-colors border ${
+            canDownload
+              ? downloadError
+                ? "border-red-200 bg-red-50 text-red-600 hover:bg-red-100"
+                : "border-border bg-surface-2 text-foreground hover:bg-white hover:border-primary/40 hover:text-primary"
+              : "border-transparent text-muted-foreground/30 cursor-not-allowed"
+          }`}
+        >
+          {downloading
+            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            : <Download className="h-3.5 w-3.5" />
+          }
+          {canDownload && <span>{downloading ? "…" : "Download"}</span>}
+        </button>
+        {downloadError && (
+          <p className="mt-1 text-[10px] text-red-600 leading-tight max-w-[120px]">{downloadError}</p>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+// ─── Badges ─────────────────────────────────────────────────────────────────
+
+function StatusBadge({ status }: { status: "pass" | "fail" }) {
+  return status === "pass" ? (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+      Pass
+    </span>
+  ) : (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-red-50 text-red-600 border border-red-200">
+      Fail
+    </span>
+  );
+}
+
+function ModeBadge({ mode }: { mode: "single" | "bulk" }) {
+  return mode === "bulk" ? (
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border"
+      style={{ color: "#F07922", borderColor: "#F0792240", backgroundColor: "#F0792208" }}
+    >
+      Bulk
+    </span>
+  ) : (
+    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-surface-2 text-muted-foreground border border-border">
+      Single
+    </span>
+  );
+}
+
+function WorkflowBadge({ workflow }: { workflow: string | null }) {
+  return (
+    <span
+      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border"
+      style={{ color: "#1C2E59", borderColor: "#1C2E5940", backgroundColor: "#1C2E5908" }}
+    >
+      {workflowDisplayName(workflow)}
+    </span>
+  );
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function formatDate(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}

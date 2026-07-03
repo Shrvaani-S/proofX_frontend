@@ -68,8 +68,8 @@ export function buildReconcileLRF(lrfData: LRFData, lrfId: string): ReconcileLRF
     // which checks that old disappears from base and new appears in revised.
     const field = ATTRIBUTE_TO_BACKEND_FIELD[attrId] ?? attrId;
     // Strip URL protocol — OCR never includes it, so matching would always fail otherwise.
-    const old = change.oldValue.trim().replace(/^https?:\/\//i, "");
-    const next = change.newValue.trim().replace(/^https?:\/\//i, "");
+    const old = (change.oldValue ?? "").trim().replace(/^https?:\/\//i, "");
+    const next = (change.newValue ?? "").trim().replace(/^https?:\/\//i, "");
     // Both sides required: a one-sided token match trivially passes on almost any finding.
     if (!old || !next) continue;
     requirements.push({

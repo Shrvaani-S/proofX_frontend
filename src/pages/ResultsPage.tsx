@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft, Home, Maximize2, ScanLine } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Home, Maximize2, ScanLine, X } from "lucide-react";
 import { LabelImage } from "@/components/LabelImage";
 import { exportPDF } from "@/report/ExportModal";
 // import { ExportModal } from "@/report/ExportModal"; // TODO: Re-enable for full export modal UI
@@ -19,12 +19,15 @@ interface Props {
    *  backend engine can actually verify (see lib/lrfReconcile.ts). Falls back to the client-side
    *  classifyFinding heuristic for everything else. */
   reconciliationByPair?: Record<string, ReconciliationOverrides>;
+  /** Warning shown when some pairs were skipped (e.g. alignment flagged). */
+  partialError?: string;
   onBack: () => void;
   onHome?: () => void;
 }
 
 
-export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliationByPair, onBack, onHome }: Props) {
+export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliationByPair, partialError, onBack, onHome }: Props) {
+  const [partialErrorDismissed, setPartialErrorDismissed] = useState(false);
   const [activePairId, setActivePairId] = useState(pairs[0].id);
   const [activeCats, setActiveCats] = useState<Set<Category | "all">>(
     new Set<Category | "all">(["all"]),
@@ -37,11 +40,15 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
   const [hoveredPanel, setHoveredPanel] = useState<"master" | "revised" | null>(null);
 
   const calcFit = (el: HTMLDivElement) => {
-    const w = pairs[0].width ?? LABEL_W;
-    const h = pairs[0].height ?? LABEL_H;
+    // Use the active pair's dimensions so fit-to-window is correct when switching
+    // between bulk pairs that may have different sizes. `pair` is a closure
+    // variable declared later in this render — safe because calcFit is never
+    // invoked synchronously before `pair` is initialised.
+    const w = pair.width ?? LABEL_W;
+    const h = pair.height ?? LABEL_H;
     const availH = el.clientHeight - 48;
     const availW = el.clientWidth - 48;
-    if (availH > 0 && availW > 0) {
+    if (availH > 0 && availW > 0 && w > 0 && h > 0) {
       // Floor low enough that large real-backend images can fit; without this the
       // old 30% floor sat above the true fit and the full label could never show.
       return Math.round(Math.max(5, Math.min(200, Math.min(availW / w, availH / h) * 100)));
@@ -68,7 +75,8 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
   const [isExporting, setIsExporting] = useState(false);
   const [activeStatus, setActiveStatus] = useState<"all" | "expected" | "unexpected">("all");
 
-  const pair = pairs.find((p) => p.id === activePairId)!;
+  const activePairIndex = Math.max(0, pairs.findIndex((p) => p.id === activePairId));
+  const pair = pairs[activePairIndex];
   const canvasW = pair.width ?? LABEL_W;
   const canvasH = pair.height ?? LABEL_H;
   const reconciliation = reconciliationByPair?.[pair.id];
@@ -140,9 +148,11 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
     });
   };
 
-  // Reset selection when switching pairs
+  // Reset selection and scroll position when switching pairs
   useEffect(() => {
     setSelectedFinding(null);
+    masterRef.current?.scrollTo({ top: 0, left: 0 });
+    revisedRef.current?.scrollTo({ top: 0, left: 0 });
   }, [activePairId]);
 
   // Window-level handler is the only reliable way to intercept Ctrl+scroll before
@@ -227,8 +237,19 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
         </div>
       </header>
 
+      {/* Partial-error warning banner */}
+      {partialError && !partialErrorDismissed && (
+        <div className="flex items-start gap-3 bg-amber-50 border-b border-amber-200 px-5 py-2.5 flex-shrink-0">
+          <AlertTriangle className="h-4 w-4 text-amber-500 shrink-0 mt-0.5" />
+          <p className="flex-1 text-xs text-amber-800 leading-relaxed">{partialError}</p>
+          <button onClick={() => setPartialErrorDismissed(true)} className="shrink-0 text-amber-400 hover:text-amber-600 transition-colors">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
       {/* Main grid */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 overflow-hidden">
         {mode === "bulk" && (
           <aside className="w-[200px] border-r border-border bg-surface flex flex-col flex-shrink-0">
             <div className="px-4 py-3 border-b border-border text-xs uppercase tracking-wide text-muted-foreground">
@@ -254,14 +275,15 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
                         vs {p.revisedName}
                       </span>
                     </span>
-                    <span
-                      className="ml-2 text-[11px] px-1.5 py-0.5 rounded-full text-white font-medium"
-                      style={{
-                        backgroundColor: count === 0 ? "#1D9E75" : "#1C2E59",
-                      }}
-                    >
-                      {count}
-                    </span>
+                    {p.alignmentFlagged
+                      ? <AlertTriangle className="ml-2 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                      : <span
+                          className="ml-2 text-[11px] px-1.5 py-0.5 rounded-full text-white font-medium shrink-0"
+                          style={{ backgroundColor: count === 0 ? "#1D9E75" : "#1C2E59" }}
+                        >
+                          {count}
+                        </span>
+                    }
                   </button>
                 );
               })}
@@ -270,7 +292,17 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
         )}
 
         {/* Label panels */}
-        <div className="flex-1 flex min-w-0">
+        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+          {/* Per-pair alignment warning */}
+          {pair.alignmentFlagged && (
+            <div className="flex items-center gap-2 bg-amber-50 border-b border-amber-200 px-4 py-2 flex-shrink-0">
+              <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+              <span className="text-xs text-amber-800">
+                Alignment warning — the label body shifted independently of its header/footer on this page. Findings may be unreliable.
+              </span>
+            </div>
+          )}
+        <div className="flex-1 flex min-w-0 min-h-0">
           <LabelPanel
             title={pair.masterName}
             version={`Master · ${pair.masterVersion}`}
@@ -312,6 +344,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
             onMouseEnter={() => setHoveredPanel("revised")}
             onMouseLeave={() => setHoveredPanel(null)}
           />
+        </div>
         </div>
 
         {/* Findings sidebar */}
@@ -473,7 +506,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
         <div className="flex items-center gap-2">
           <span className="h-1.5 w-1.5 rounded-full bg-primary" />
           {mode === "bulk"
-            ? `${pairs.length} pairs loaded`
+            ? `Pair ${activePairIndex + 1} of ${pairs.length}`
             : "Analysis complete"}
         </div>
         <div className="flex items-center gap-4">
@@ -667,7 +700,7 @@ function LabelPanel({
   }, [scrollRef]);
 
   return (
-    <div className="flex-1 flex flex-col min-w-0">
+    <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <div
         className="h-11 px-4 flex items-center justify-between flex-shrink-0"
         style={{

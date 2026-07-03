@@ -123,7 +123,8 @@ async function loadImageFromUrl(
       const canvas = document.createElement("canvas");
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
-      const ctx = canvas.getContext("2d")!;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(null); return; }
       ctx.drawImage(img, 0, 0);
       try {
         resolve({ dataUrl: canvas.toDataURL("image/jpeg", 0.92), width: img.naturalWidth, height: img.naturalHeight });
@@ -210,6 +211,30 @@ async function captureCardToDataUrl(cardEl: HTMLDivElement): Promise<string> {
   return canvas.toDataURL("image/jpeg", 0.92);
 }
 
+// ─── Report ID — daily-resetting counter ─────────────────────────────────────
+
+function generateReportId(): string {
+  const now     = new Date();
+  const yyyy    = now.getFullYear();
+  const dateStr = `${yyyy}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+
+  let count = 1;
+  try {
+    const raw = localStorage.getItem("proofx_export_count");
+    if (raw) {
+      const { date, n } = JSON.parse(raw) as { date: string; n: number };
+      count = date === dateStr ? n + 1 : 1;
+    }
+    localStorage.setItem("proofx_export_count", JSON.stringify({ date: dateStr, n: count }));
+  } catch { /* ignore — localStorage unavailable (e.g. private browsing) */ }
+
+  return `${yyyy}${String(count).padStart(4, "0")}`;
+}
+
+function buildExportFilename(reportId: string, isLrfWorkflow?: boolean): string {
+  return isLrfWorkflow ? `ProofX_${reportId}.pdf` : `ProofX_Report_${reportId}.pdf`;
+}
+
 // ─── PDF export ───────────────────────────────────────────────────────────────
 
 export async function exportPDF(
@@ -223,159 +248,240 @@ export async function exportPDF(
   lrfData?: LRFData | null,
   isLrfWorkflow?: boolean,
 ) {
-  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  const navy = [28, 46, 89] as [number, number, number];
-  const orange = [240, 121, 34] as [number, number, number];
+  const doc       = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const navy      = [28, 46, 89]    as [number, number, number];
+  const orange    = [240, 121, 34]  as [number, number, number];
   const lightGray = [245, 246, 248] as [number, number, number];
-  const W = 210;
+  const green     = [29, 158, 117]  as [number, number, number];
+  const red       = [220, 38, 38]   as [number, number, number];
+  const W         = 210;
+  const H         = 297;
+  const ML        = 14;
+  const usableW   = W - ML * 2;
 
-  // ── Page 1: Header + Metadata ─────────────────────────────────────────────
+  // ── Report IDs ───────────────────────────────────────────────────────────
+  const reportId    = generateReportId();
+  const proofingIds = exportPairs.map((_, i) => `${reportId}_${i + 1}`);
+  const showStatus  = !!(isLrfWorkflow && lrfData);
 
-  // Header bar
-  doc.setFillColor(...navy);
-  doc.rect(0, 0, W, 22, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(11);
-  doc.setFont("helvetica", "bold");
-  doc.text("PROOFX", 14, 10);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.text("Label Comparison Report", 14, 16);
-  doc.setTextColor(...orange);
-  doc.setFontSize(8);
-  doc.text("AUDIT-READY  ·  CHANGE CONTROL RECORD", W - 14, 13, { align: "right" });
+  // Pre-compute LRF verdicts per pair
+  const pairStatuses   = exportPairs.map((pair) => {
+    if (!showStatus) return null;
+    return pair.findings.some((f) => classifyFinding(f, lrfData!) === "unexpected") ? "FAIL" : "PASS";
+  });
+  const pairExpected   = exportPairs.map((pair) =>
+    showStatus ? pair.findings.filter((f) => classifyFinding(f, lrfData!) === "expected").length : 0,
+  );
+  const pairUnexpected = exportPairs.map((pair) =>
+    showStatus ? pair.findings.filter((f) => classifyFinding(f, lrfData!) === "unexpected").length : 0,
+  );
 
-  // Metadata block
-  doc.setTextColor(60, 60, 60);
-  doc.setFontSize(9);
-  doc.setFont("helvetica", "bold");
-  doc.text("SESSION METADATA", 14, 32);
-  doc.setDrawColor(28, 46, 89);
-  doc.setLineWidth(0.4);
-  doc.line(14, 34, W - 14, 34);
+  // ── Shared branded header layout constants ───────────────────────────────
+  const CARD_TOP  = 3;                          // top white margin before the navy card (mm)
+  const NAVY_H    = 33;                         // navy block height (mm) — matches grid height
+  const GRID_TOP  = CARD_TOP + NAVY_H;          // grid sits directly below navy — no gap
+  const GRID_H    = 30;                         // metadata grid height
+  const AFTER_HDR = GRID_TOP + GRID_H + 10;    // first y for content (≈78mm)
 
-  const metaItems: [string, string][] = [
-    ["Generated", timestamp],
-    ["Requested By", analystName],
-    ["Change Control Ref", reference || "—"],
-    ["Label Pairs", String(exportPairs.length)],
-    ["Total Findings", String(exportPairs.reduce((n, p) => n + p.findings.length, 0))],
-  ];
-  let y = 40;
-  for (const [label, value] of metaItems) {
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(100, 100, 100);
-    doc.text(label, 14, y);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(30, 30, 30);
-    doc.text(value, 70, y);
-    y += 6;
-  }
+  // Column widths — last column wide enough that "TOTAL DOCUMENTS" fits on one line
+  // so the label wraps to 2 lines ("TOTAL DOCUMENTS" / "REVIEWED"), not 3
+  const mcW = [38, 58, 51, usableW - 38 - 58 - 51] as const; // 38|58|51|35
 
-  // Label pairs list
-  y += 4;
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(60, 60, 60);
-  doc.text("LABEL PAIRS", 14, y);
-  doc.line(14, y + 2, W - 14, y + 2);
-  y += 8;
+  // Draws the branded header block on whichever page is currently active.
+  // Returns the y position where content should start below the grid.
+  const drawBrandedHeader = () => {
+    // Navy block — card within page margins (not full-bleed)
+    doc.setFillColor(...navy);
+    doc.rect(ML, CARD_TOP, usableW, NAVY_H, "F");
 
-  for (const pair of exportPairs) {
-    doc.setFillColor(...lightGray);
-    doc.rect(14, y - 4, W - 28, 8, "F");
-    doc.setFont("helvetica", "bold");
+    // PROOFX wordmark
+    doc.setTextColor(160, 185, 215);
     doc.setFontSize(8);
-    doc.setTextColor(28, 46, 89);
-    doc.text(pair.masterName, 16, y);
+    doc.setFont("helvetica", "bold");
+    doc.text("PROOFX", ML + 5, CARD_TOP + 7);
+
+    // Title — single line, tight below PROOFX
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(22);
+    doc.setFont("helvetica", "bold");
+    doc.text("Label Proofing Report", ML + 5, CARD_TOP + 17);
+
+    // Subtitle — immediately below title
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(100, 100, 100);
-    doc.text("vs", 16 + doc.getTextWidth(pair.masterName) + 2, y);
-    doc.setTextColor(30, 30, 30);
-    doc.text(pair.revisedName, 16 + doc.getTextWidth(pair.masterName) + 8, y);
-    doc.setTextColor(100, 100, 100);
-    doc.text(`${pair.findings.length} finding${pair.findings.length !== 1 ? "s" : ""}`, W - 16, y, { align: "right" });
-    y += 10;
-  }
+    doc.setTextColor(160, 185, 215);
+    doc.text("AUDIT-READY  \u00b7  CHANGE CONTROL RECORD", ML + 5, CARD_TOP + 26);
 
-  // ── LRF Required Changes (LRF workflow only) ─────────────────────────────
-  if (isLrfWorkflow && lrfData) {
-    const definedChanges = Object.entries(lrfData.changes).filter(
-      ([, cd]) => cd.changeType !== "",
-    );
-    if (definedChanges.length > 0) {
-      y += 4;
+    // 4-column metadata grid — outer border
+    doc.setDrawColor(210, 215, 225);
+    doc.setLineWidth(0.4);
+    doc.rect(ML, GRID_TOP, usableW, GRID_H);
+
+    // Column dividers
+    doc.setLineWidth(0.3);
+    let divX = ML;
+    for (let c = 0; c < 3; c++) {
+      divX += mcW[c];
+      doc.line(divX, GRID_TOP, divX, GRID_TOP + GRID_H);
+    }
+
+    // Column content — all values in dark navy, labels in neutral gray
+    const metaCols: { label: string; value: string }[] = [
+      { label: "REPORT ID",                value: reportId                },
+      { label: "GENERATED",                value: timestamp               },
+      { label: "USER",                     value: analystName || "\u2014" },
+      { label: "TOTAL DOCUMENTS REVIEWED", value: `${exportPairs.length} pair${exportPairs.length !== 1 ? "s" : ""}` },
+    ];
+
+    let cx = ML;
+    for (let c = 0; c < 4; c++) {
+      const { label, value } = metaCols[c];
+      const cellX = cx + 5;
+      const maxW  = mcW[c] - 10;
+
+      doc.setFontSize(6.5);
       doc.setFont("helvetica", "bold");
-      doc.setFontSize(9);
-      doc.setTextColor(60, 60, 60);
-      doc.text("LRF REQUIRED CHANGES", 14, y);
-      doc.setDrawColor(28, 46, 89);
-      doc.setLineWidth(0.4);
-      doc.line(14, y + 2, W - 14, y + 2);
-      y += 8;
+      doc.setTextColor(100, 120, 155);
+      doc.text(label, cellX, GRID_TOP + 9, { maxWidth: maxW });
 
-      // Table header
-      doc.setFillColor(28, 46, 89);
-      doc.rect(14, y - 4, W - 28, 7, "F");
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...navy);
+      doc.text(value, cellX, GRID_TOP + 23, { maxWidth: maxW });
+
+      cx += mcW[c];
+    }
+
+    return AFTER_HDR;
+  };
+
+  // ── PAGE 1: COVER ────────────────────────────────────────────────────────
+  let y = drawBrandedHeader();
+
+  // LRF: Change Summary on cover
+  if (showStatus) {
+    const definedChanges = Object.entries(lrfData!.changes).filter(([, cd]) => cd.changeType !== "");
+    if (definedChanges.length > 0) {
+      y += 6;
+      doc.setFillColor(...navy);
+      doc.rect(ML, y - 5, usableW, 9, "F");
       doc.setTextColor(255, 255, 255);
       doc.setFontSize(7.5);
       doc.setFont("helvetica", "bold");
-      doc.text("ATTRIBUTE", 16, y);
-      doc.text("CHANGE TYPE", 90, y);
-      doc.text("OLD -> NEW VALUE", 135, y);
-      y += 5;
+      doc.text("CHANGE SUMMARY \u2014 EXPECTED CHANGES", ML + 3, y + 0.5);
+      y += 11;
 
-      for (let i = 0; i < definedChanges.length; i++) {
-        const [attrId, cd] = definedChanges[i];
-        const info = LRF_ATTRIBUTE_LOOKUP[attrId];
-        const label = info?.label ?? attrId;
-        if (i % 2 === 0) {
-          doc.setFillColor(...lightGray);
-          doc.rect(14, y - 4, W - 28, 7, "F");
-        }
-        doc.setFont("helvetica", "normal");
+      for (const [attrId, cd] of definedChanges) {
+        if (y > H - 18) break;
+        const label   = LRF_ATTRIBUTE_LOOKUP[attrId]?.label ?? attrId;
+        const fromVal = cd.oldValue || "\u2014";
+        const toVal   = cd.newValue || "\u2014";
+
         doc.setFontSize(8);
-        doc.setTextColor(30, 30, 30);
-        doc.text(label, 16, y, { maxWidth: 70 });
-        doc.setTextColor(100, 100, 100);
-        doc.text(cd.changeType, 90, y);
-        doc.setTextColor(30, 30, 30);
-        const valueText = cd.oldValue && cd.newValue
-          ? `${cd.oldValue} -> ${cd.newValue}`
-          : cd.newValue || cd.oldValue || "—";
-        doc.text(valueText, 135, y, { maxWidth: W - 135 - 16 });
-        y += 7;
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(28, 46, 89);
+        doc.text(label, ML, y, { maxWidth: 65 });
+
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(80, 80, 80);
+        doc.text(fromVal, ML + 70, y);
+
+        const arrowX = ML + 70 + doc.getTextWidth(fromVal) + 4;
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(...orange);
+        doc.text("\u2192", arrowX, y);
+
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(20, 20, 20);
+        doc.text(toVal, arrowX + 6, y, { maxWidth: W - ML - (arrowX + 6) });
+        y += 8;
       }
     }
   }
 
-  // ── Per-pair: visual comparison + findings ───────────────────────────────
+  // ── PAGE 2: Summary placeholder (rendered after pair pages) ─────────────
+  doc.addPage();
+  const SUMMARY_PAGE = 2;
 
+  // ── PER-PAIR PAGES (3+) ──────────────────────────────────────────────────
   const isPdf = (name: string) => name.toLowerCase().endsWith(".pdf");
   type ImgData = { dataUrl: string; width: number; height: number };
-
-  const usableW = W - 28;
-  const panelW = (usableW - 6) / 2;
-  const labelHeaderH = 8;
-  const vizStartY = 22;
+  const pairPageNumbers: number[] = [];
+  const MAX_IMG_H = 88; // mm per image (full-width stacked)
 
   for (let pIdx = 0; pIdx < exportPairs.length; pIdx++) {
-    const pair = exportPairs[pIdx];
-
-    // ── Visual comparison page for this pair ────────────────────────────
     doc.addPage();
+    const pairPage = doc.getNumberOfPages();
+    pairPageNumbers.push(pairPage);
 
+    const pair       = exportPairs[pIdx];
+    const proofingId = proofingIds[pIdx];
+    const status     = pairStatuses[pIdx];
+
+    // Header bar
     doc.setFillColor(...navy);
-    doc.rect(0, 0, W, 16, "F");
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(9);
-    doc.setFont("helvetica", "bold");
-    const vizTitle = exportPairs.length > 1
-      ? `LABEL VISUAL COMPARISON — ${pair.masterName} vs ${pair.revisedName}`
-      : "LABEL VISUAL COMPARISON";
-    doc.text(vizTitle, 14, 11, { maxWidth: W - 28 });
+    doc.rect(0, 0, W, 18, "F");
 
-    // Resolve images — URL first, DOM capture fallback for active pair only
+    const vizPrefix = "LABEL VISUAL COMPARISON";
+    doc.setTextColor(190, 205, 225);
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "normal");
+    doc.text(vizPrefix, ML, 9);
+    doc.setTextColor(...orange);
+    doc.setFont("helvetica", "bold");
+    doc.text(`  \u00b7  ${proofingId}`, ML + doc.getTextWidth(vizPrefix), 9);
+
+    // Back link (right side, second line of header)
+    const backText = "\u2190 Back to Summary Table";
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(190, 205, 225);
+    doc.text(backText, W - ML, 15, { align: "right" });
+    const backW = doc.getTextWidth(backText);
+    doc.link(W - ML - backW, 11, backW, 5, { pageNumber: SUMMARY_PAGE });
+
+    // Large proofing ID
+    let cy = 26;
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(16);
+    doc.setTextColor(...navy);
+    doc.text(proofingId, ML, cy);
+
+    // Pass/Fail badge (LRF only)
+    if (status) {
+      const badgeColor = status === "PASS" ? green : red;
+      const idW        = doc.getTextWidth(proofingId);
+      doc.setFillColor(...badgeColor);
+      doc.roundedRect(ML + idW + 5, cy - 5.5, 18, 7, 1.5, 1.5, "F");
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(6.5);
+      doc.text(status, ML + idW + 14, cy - 0.5, { align: "center" });
+    }
+
+    // Label names row
+    cy += 7;
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(120, 120, 120);
+    doc.text("Current:", ML, cy);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(30, 30, 30);
+    doc.text(pair.masterName, ML + 20, cy, { maxWidth: usableW / 2 - 22 });
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(120, 120, 120);
+    doc.text("Revised:", ML + usableW / 2, cy);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(30, 30, 30);
+    doc.text(pair.revisedName, ML + usableW / 2 + 20, cy, { maxWidth: usableW / 2 - 22 });
+
+    // Separator
+    cy += 5;
+    doc.setDrawColor(220, 220, 220);
+    doc.setLineWidth(0.3);
+    doc.line(ML, cy, W - ML, cy);
+    cy += 5;
+
+    // Resolve images
     let masterImg: ImgData | null = null;
     let revisedImg: ImgData | null = null;
 
@@ -398,98 +504,82 @@ export async function exportPDF(
       revisedImg = { dataUrl, width: revisedCardRef.current.offsetWidth, height: revisedCardRef.current.offsetHeight };
     }
 
-    let contentEndY = vizStartY;
+    // CURRENT VERSION LABEL — full width
+    doc.setFillColor(254, 242, 242);
+    doc.rect(ML, cy, usableW, 7, "F");
+    doc.setFillColor(224, 36, 36);
+    doc.circle(ML + 3.5, cy + 3.5, 1.2, "F");
+    doc.setTextColor(224, 36, 36);
+    doc.setFontSize(6.5);
+    doc.setFont("helvetica", "bold");
+    doc.text("CURRENT VERSION LABEL", ML + 7, cy + 4.8);
+    cy += 7;
 
-    if (masterImg && revisedImg) {
-      try {
-        const maxImgH = 185;
-        const panelImgH = Math.min(maxImgH, panelW * (masterImg.height / masterImg.width));
-
-        // Master panel
-        const mX = 14;
-        doc.setFillColor(254, 242, 242);
-        doc.rect(mX, vizStartY, panelW, labelHeaderH, "F");
-        doc.setDrawColor(224, 36, 36);
-        doc.setLineWidth(0.4);
-        doc.line(mX, vizStartY + labelHeaderH, mX + panelW, vizStartY + labelHeaderH);
-        doc.setFillColor(224, 36, 36);
-        doc.circle(mX + 3, vizStartY + labelHeaderH / 2, 1.2, "F");
-        doc.setTextColor(224, 36, 36);
-        doc.setFontSize(6.5);
-        doc.setFont("helvetica", "bold");
-        doc.text("CURRENT VERSION LABEL", mX + 6, vizStartY + 5.2);
-        doc.addImage(masterImg.dataUrl, "JPEG", mX, vizStartY + labelHeaderH, panelW, panelImgH);
-        doc.setDrawColor(200, 200, 200);
-        doc.setLineWidth(0.3);
-        doc.rect(mX, vizStartY + labelHeaderH, panelW, panelImgH);
-
-        // Revised panel
-        const rX = 14 + panelW + 6;
-        doc.setFillColor(239, 246, 255);
-        doc.rect(rX, vizStartY, panelW, labelHeaderH, "F");
-        doc.setDrawColor(26, 86, 219);
-        doc.setLineWidth(0.4);
-        doc.line(rX, vizStartY + labelHeaderH, rX + panelW, vizStartY + labelHeaderH);
-        doc.setFillColor(26, 86, 219);
-        doc.circle(rX + 3, vizStartY + labelHeaderH / 2, 1.2, "F");
-        doc.setTextColor(26, 86, 219);
-        doc.setFontSize(6.5);
-        doc.setFont("helvetica", "bold");
-        doc.text("NEW VERSION LABEL", rX + 6, vizStartY + 5.2);
-        doc.addImage(revisedImg.dataUrl, "JPEG", rX, vizStartY + labelHeaderH, panelW, panelImgH);
-        doc.setDrawColor(200, 200, 200);
-        doc.setLineWidth(0.3);
-        doc.rect(rX, vizStartY + labelHeaderH, panelW, panelImgH);
-
-        contentEndY = vizStartY + labelHeaderH + panelImgH + 4;
-        doc.setFontSize(7);
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(100, 100, 100);
-        const legendText = pair.masterUrl
-          ? "Label images as uploaded. See findings table for detailed change annotations."
-          : "Annotations shown at the zoom level active during export.";
-        doc.text(legendText, 14, contentEndY + 3, { maxWidth: usableW });
-        contentEndY += 8;
-      } catch {
-        doc.setTextColor(100, 100, 100);
-        doc.setFontSize(9);
-        doc.setFont("helvetica", "italic");
-        doc.text("Label visual capture unavailable for this export.", 14, vizStartY + 10);
-        contentEndY = vizStartY + 16;
-      }
+    if (masterImg) {
+      const imgH = Math.min(MAX_IMG_H, usableW * (masterImg.height / masterImg.width));
+      doc.addImage(masterImg.dataUrl, "JPEG", ML, cy, usableW, imgH);
+      doc.setDrawColor(210, 210, 210);
+      doc.setLineWidth(0.25);
+      doc.rect(ML, cy, usableW, imgH);
+      cy += imgH;
     } else {
-      doc.setTextColor(100, 100, 100);
-      doc.setFontSize(9);
+      doc.setFillColor(248, 248, 248);
+      doc.rect(ML, cy, usableW, 18, "F");
+      doc.setTextColor(160, 160, 160);
+      doc.setFontSize(8);
       doc.setFont("helvetica", "italic");
-      doc.text("No label images were available at the time of export.", 14, vizStartY + 10);
-      contentEndY = vizStartY + 16;
+      doc.text("Label image not available", ML + usableW / 2, cy + 10, { align: "center" });
+      cy += 18;
     }
 
-    // ── Findings for this pair ───────────────────────────────────────────
+    cy += 4; // gap between images
+
+    // NEW VERSION LABEL — full width
+    doc.setFillColor(239, 246, 255);
+    doc.rect(ML, cy, usableW, 7, "F");
+    doc.setFillColor(26, 86, 219);
+    doc.circle(ML + 3.5, cy + 3.5, 1.2, "F");
+    doc.setTextColor(26, 86, 219);
+    doc.setFontSize(6.5);
+    doc.setFont("helvetica", "bold");
+    doc.text("NEW VERSION LABEL", ML + 7, cy + 4.8);
+    cy += 7;
+
+    if (revisedImg) {
+      const imgH = Math.min(MAX_IMG_H, usableW * (revisedImg.height / revisedImg.width));
+      doc.addImage(revisedImg.dataUrl, "JPEG", ML, cy, usableW, imgH);
+      doc.setDrawColor(210, 210, 210);
+      doc.setLineWidth(0.25);
+      doc.rect(ML, cy, usableW, imgH);
+      cy += imgH;
+    } else {
+      doc.setFillColor(248, 248, 248);
+      doc.rect(ML, cy, usableW, 18, "F");
+      doc.setTextColor(160, 160, 160);
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "italic");
+      doc.text("Label image not available", ML + usableW / 2, cy + 10, { align: "center" });
+      cy += 18;
+    }
+
+    // Findings table
     if (pair.findings.length === 0) continue;
 
-    // Start findings on same page if enough room, otherwise new page
-    let findingsY = contentEndY + 8;
-    if (findingsY > 210) {
-      doc.addPage();
-      findingsY = 20;
-    }
+    let findingsY = cy + 8;
+    if (findingsY > H - 50) { doc.addPage(); findingsY = 20; }
 
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(9);
+    doc.setFontSize(8);
     doc.setTextColor(60, 60, 60);
-    doc.text(`FINDINGS — ${pair.masterName} vs ${pair.revisedName}`, 14, findingsY);
-    doc.setDrawColor(28, 46, 89);
-    doc.setLineWidth(0.4);
-    doc.line(14, findingsY + 2, W - 14, findingsY + 2);
+    doc.text("FINDINGS", ML, findingsY);
+    doc.setDrawColor(...navy);
+    doc.setLineWidth(0.3);
+    doc.line(ML, findingsY + 2, W - ML, findingsY + 2);
     findingsY += 6;
-
-    const showStatus = !!(isLrfWorkflow && lrfData);
-    const statusCol = 5; // index of STATUS column when present
 
     autoTable(doc, {
       startY: findingsY,
-      margin: { left: 14, right: 14 },
+      margin: { left: ML, right: ML },
       head: [showStatus
         ? ["ID", "Category", "Description", "Master Had", "Revised Has", "Status"]
         : ["ID", "Category", "Description", "Master Had", "Revised Has"]
@@ -503,102 +593,116 @@ export async function exportPDF(
           f.after,
         ];
         if (showStatus) {
-          const cls = classifyFinding(f, lrfData);
-          row.push(cls === "expected" ? "EXPECTED" : cls === "unexpected" ? "UNEXPECTED" : "—");
+          const cls = classifyFinding(f, lrfData!);
+          row.push(cls === "expected" ? "EXPECTED" : cls === "unexpected" ? "UNEXPECTED" : "\u2014");
         }
         return row;
       }),
-      headStyles: {
-        fillColor: navy,
-        textColor: [255, 255, 255],
-        fontStyle: "bold",
-        fontSize: 8,
-      },
-      bodyStyles: { fontSize: 8, textColor: [30, 30, 30] },
+      headStyles: { fillColor: navy, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5 },
+      bodyStyles: { fontSize: 7.5, textColor: [30, 30, 30] },
       alternateRowStyles: { fillColor: lightGray },
       columnStyles: showStatus
-        ? {
-            0: { cellWidth: 12 },
-            1: { cellWidth: 20 },
-            2: { cellWidth: 44 },
-            3: { cellWidth: 34 },
-            4: { cellWidth: 34 },
-            5: { cellWidth: 28, halign: "center" },
-          }
-        : {
-            0: { cellWidth: 12 },
-            1: { cellWidth: 22 },
-            2: { cellWidth: 52 },
-            3: { cellWidth: 40 },
-            4: { cellWidth: 40 },
-          },
+        ? { 0: { cellWidth: 12 }, 1: { cellWidth: 20 }, 2: { cellWidth: 54 }, 3: { cellWidth: 38 }, 4: { cellWidth: 34 }, 5: { cellWidth: 24, halign: "center" } }
+        : { 0: { cellWidth: 12 }, 1: { cellWidth: 22 }, 2: { cellWidth: 54 }, 3: { cellWidth: 47 }, 4: { cellWidth: 47 } },
       didParseCell(data) {
         if (data.section === "body" && data.column.index === 0) {
-          const cat = pair.findings[data.row.index]?.category;
+          const cat   = pair.findings[data.row.index]?.category;
           const color = CATEGORIES.find((c) => c.id === cat)?.color ?? "#000";
-          const r = parseInt(color.slice(1, 3), 16);
-          const g = parseInt(color.slice(3, 5), 16);
-          const b = parseInt(color.slice(5, 7), 16);
-          data.cell.styles.textColor = [r, g, b];
+          data.cell.styles.textColor = [parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16)];
           data.cell.styles.fontStyle = "bold";
         }
-        // Status badge colouring
-        if (showStatus && data.section === "body" && data.column.index === statusCol) {
-          const val = data.cell.raw as string;
-          if (val === "EXPECTED") {
-            data.cell.styles.fillColor = [29, 158, 117];   // green
-            data.cell.styles.textColor = [255, 255, 255];
-            data.cell.styles.fontStyle = "bold";
-          } else if (val === "UNEXPECTED") {
-            data.cell.styles.fillColor = [217, 119, 6];    // amber
-            data.cell.styles.textColor = [255, 255, 255];
-            data.cell.styles.fontStyle = "bold";
-          }
+        if (showStatus && data.section === "body" && data.column.index === 5) {
+          const val = typeof data.cell.raw === "string" ? data.cell.raw : "";
+          if (val === "EXPECTED")   { data.cell.styles.fillColor = [29, 158, 117]; data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
+          if (val === "UNEXPECTED") { data.cell.styles.fillColor = [217, 119, 6];  data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
         }
       },
     });
   }
 
-  // Footer on each page
+  // ── PAGE 2: SUMMARY TABLE (rendered last so pair page numbers are known) ──
+  doc.setPage(SUMMARY_PAGE);
+  const summaryContentY = drawBrandedHeader(); // same branded header as cover
+
+  // "SUMMARY TABLE" section label
+  doc.setFillColor(...navy);
+  doc.rect(ML, summaryContentY, usableW, 9, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.text("SUMMARY TABLE", ML + 4, summaryContentY + 6);
+
+  // LRF Expected/Unexpected text descriptions (mirrors reference PDF style)
+  const fmtExpected   = (i: number) => pairExpected[i]   > 0 ? "Updated"       : "Not updated";
+  const fmtUnexpected = (i: number) => pairUnexpected[i] > 0 ? "Available"     : "Not available";
+
+  const summaryHead = showStatus
+    ? [["PROOFING ID", "CURRENT LABEL", "REVISED LABEL", "EXPECTED\nCHANGES", "UNEXPECTED\nCHANGES", "PROOFING\nSTATUS"]]
+    : [["PROOFING ID", "CURRENT LABEL", "REVISED LABEL", "FINDINGS"]];
+
+  const summaryBody = exportPairs.map((pair, i) =>
+    showStatus
+      ? [proofingIds[i], pair.masterName, pair.revisedName, fmtExpected(i), fmtUnexpected(i), pairStatuses[i] ?? "\u2014"]
+      : [proofingIds[i], pair.masterName, pair.revisedName, String(pair.findings.length)],
+  );
+
+  autoTable(doc, {
+    startY: summaryContentY + 9,
+    margin: { left: ML, right: ML },
+    head: summaryHead,
+    body: summaryBody,
+    headStyles: { fillColor: navy, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5, minCellHeight: 12 },
+    bodyStyles: { fontSize: 8, textColor: [30, 30, 30] },
+    alternateRowStyles: { fillColor: lightGray },
+    columnStyles: showStatus
+      ? { 0: { cellWidth: 26 }, 1: { cellWidth: 38 }, 2: { cellWidth: 38 }, 3: { cellWidth: 30, halign: "center" }, 4: { cellWidth: 30, halign: "center" }, 5: { cellWidth: 20, halign: "center" } }
+      : { 0: { cellWidth: 34 }, 1: { cellWidth: 65 }, 2: { cellWidth: 65 }, 3: { cellWidth: 18, halign: "center" } },
+    didParseCell(data) {
+      // Proofing ID — styled as a blue link
+      if (data.section === "body" && data.column.index === 0) {
+        data.cell.styles.textColor = [26, 86, 219];
+        data.cell.styles.fontStyle = "bold";
+      }
+      if (showStatus && data.section === "body" && data.column.index === 5) {
+        const val = typeof data.cell.raw === "string" ? data.cell.raw : "";
+        if (val === "PASS") { data.cell.styles.fillColor = [29, 158, 117]; data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
+        if (val === "FAIL") { data.cell.styles.fillColor = [220, 38, 38];  data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
+      }
+    },
+    didDrawCell(data) {
+      // Internal PDF link: Proofing ID → its pair page
+      if (data.section === "body" && data.column.index === 0) {
+        const targetPage = pairPageNumbers[data.row.index];
+        if (targetPage) doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { pageNumber: targetPage });
+      }
+    },
+  });
+
+  const summaryEndY = (doc as any).lastAutoTable?.finalY ?? 80;
+  doc.setFontSize(7);
+  doc.setFont("helvetica", "italic");
+  doc.setTextColor(130, 130, 130);
+  doc.text(
+    "Each Proofing ID is a clickable link \u2014 click to navigate to the respective label comparison page.",
+    ML,
+    summaryEndY + 7,
+    { maxWidth: usableW },
+  );
+
+  // ── FOOTER on every page ──────────────────────────────────────────────────
   const totalPages = doc.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
     doc.setFillColor(...navy);
-    doc.rect(0, 287, W, 10, "F");
-    doc.setTextColor(255, 255, 255);
+    doc.rect(0, H - 10, W, 10, "F");
+    doc.setTextColor(190, 205, 225);
     doc.setFontSize(7);
     doc.setFont("helvetica", "normal");
-    doc.text(`ProofX · Confidential · ${analystName}`, 14, 293);
-    doc.text(`Page ${i} of ${totalPages}`, W - 14, 293, { align: "right" });
+    doc.text(`ProofX  \u00b7  Confidential  \u00b7  ${analystName || "\u2014"}`, ML, H - 4);
+    doc.text(`Page ${i} of ${totalPages}`, W - ML, H - 4, { align: "right" });
   }
 
-  doc.save(buildExportFilename(isLrfWorkflow));
-}
-
-// ─── Export filename — daily-resetting counter ────────────────────────────────
-
-function buildExportFilename(isLrfWorkflow?: boolean): string {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const dd = String(now.getDate()).padStart(2, "0");
-  const dateStr = `${yyyy}${mm}${dd}`;
-
-  // Read stored counter; reset if date has changed
-  let count = 1;
-  try {
-    const raw = localStorage.getItem("proofx_export_count");
-    if (raw) {
-      const { date, n } = JSON.parse(raw) as { date: string; n: number };
-      count = date === dateStr ? n + 1 : 1;
-    }
-  } catch { /* ignore */ }
-  localStorage.setItem("proofx_export_count", JSON.stringify({ date: dateStr, n: count }));
-
-  const seq = String(count).padStart(4, "0");
-  return isLrfWorkflow
-    ? `ProofX_${dateStr}_${seq}.pdf`
-    : `ProofX_Report_${dateStr}_${seq}.pdf`;
+  doc.save(buildExportFilename(reportId, isLrfWorkflow));
 }
 
 // ─── Component (dormant — rename back to `export function ExportModal` to re-enable) ──────────

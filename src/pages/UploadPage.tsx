@@ -1,8 +1,23 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowLeft, ArrowRight, Upload, FileText, X, ScanLine,
-  CheckCircle2, Hash, Package, Layers, User, Calendar, Tag,
+  CheckCircle2, Hash, Package, Layers, User, Calendar, Tag, AlertTriangle,
 } from "lucide-react";
+import * as pdfjsLib from "pdfjs-dist";
+import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = workerSrc;
+
+async function getPdfPageCount(file: File): Promise<number | undefined> {
+  if (!file.name.toLowerCase().endsWith(".pdf")) return undefined;
+  try {
+    const data = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    return pdf.numPages;
+  } catch {
+    return undefined;
+  }
+}
 import StepIndicator, { STEPS_LRF, STEPS_QUICK } from "@/components/StepIndicator";
 import { LRF_ATTRIBUTE_LOOKUP } from "@/data/lrfAttributes";
 import type { LRFData } from "@/types/lrf";
@@ -12,6 +27,7 @@ interface UploadedFile {
   size: number;
   url: string;
   file: File;
+  pageCount?: number;
 }
 
 export interface UploadedFileNames {
@@ -21,6 +37,8 @@ export interface UploadedFileNames {
   revisedUrls: string[];
   masterFiles: File[];
   revisedFiles: File[];
+  masterPageCounts: (number | undefined)[];
+  revisedPageCounts: (number | undefined)[];
 }
 
 interface Props {
@@ -47,17 +65,27 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
   const [revised, setRevised] = useState<UploadedFile | null>(null);
   const [bulkMasters, setBulkMasters] = useState<UploadedFile[]>([]);
   const [bulkRevised, setBulkRevised] = useState<UploadedFile[]>([]);
+  const [showMismatchDialog, setShowMismatchDialog] = useState(false);
 
-  const pairCount = bulkMasters.length; // counts match, so either length works
-  const bulkReady =
-    bulkMasters.length > 0 &&
-    bulkRevised.length > 0 &&
-    bulkMasters.length === bulkRevised.length;
-  const ready =
-    mode === "single" ? !!master && !!revised : bulkReady;
+  const closeMismatchDialog = () => {
+    setShowMismatchDialog(false);
+  };
 
-  const handleRun = () => {
-    if (!ready) return;
+  // Effective pair count is always min of both sides.
+  const pairCount = Math.min(bulkMasters.length, bulkRevised.length);
+  const bulkHasFiles = bulkMasters.length > 0 && bulkRevised.length > 0;
+  const bulkMismatch = bulkHasFiles && bulkMasters.length !== bulkRevised.length;
+  const ready = mode === "single" ? !!master && !!revised : bulkHasFiles;
+
+  // Files on the longer side that will not be considered.
+  const extraMasters = bulkMasters.length > bulkRevised.length
+    ? bulkMasters.slice(bulkRevised.length)
+    : [];
+  const extraRevised = bulkRevised.length > bulkMasters.length
+    ? bulkRevised.slice(bulkMasters.length)
+    : [];
+
+  const dispatchRun = () => {
     if (mode === "single") {
       onRun("single", 1, {
         masterNames: [master!.name],
@@ -66,18 +94,99 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
         revisedUrls: [revised!.url],
         masterFiles: [master!.file],
         revisedFiles: [revised!.file],
+        masterPageCounts: [master!.pageCount],
+        revisedPageCounts: [revised!.pageCount],
       });
     } else {
+      const m = bulkMasters.slice(0, pairCount);
+      const r = bulkRevised.slice(0, pairCount);
       onRun("bulk", pairCount, {
-        masterNames: bulkMasters.slice(0, pairCount).map((f) => f.name),
-        revisedNames: bulkRevised.slice(0, pairCount).map((f) => f.name),
-        masterUrls:  bulkMasters.slice(0, pairCount).map((f) => f.url),
-        revisedUrls: bulkRevised.slice(0, pairCount).map((f) => f.url),
-        masterFiles: bulkMasters.slice(0, pairCount).map((f) => f.file),
-        revisedFiles: bulkRevised.slice(0, pairCount).map((f) => f.file),
+        masterNames: m.map((f) => f.name),
+        revisedNames: r.map((f) => f.name),
+        masterUrls:  m.map((f) => f.url),
+        revisedUrls: r.map((f) => f.url),
+        masterFiles: m.map((f) => f.file),
+        revisedFiles: r.map((f) => f.file),
+        masterPageCounts: m.map((f) => f.pageCount),
+        revisedPageCounts: r.map((f) => f.pageCount),
       });
     }
   };
+
+  const handleRun = () => {
+    if (!ready) return;
+    if (mode === "bulk" && bulkMismatch) {
+      setShowMismatchDialog(true);
+      return;
+    }
+    dispatchRun();
+  };
+
+  const mismatchDialog = showMismatchDialog && (
+    <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[110] flex items-center justify-center p-4">
+      <div className="bg-white rounded-xl shadow-2xl p-7 w-[500px] flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
+
+        {/* Header */}
+        <div className="flex items-start gap-4">
+          <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+          </div>
+          <div>
+            <div className="text-sm font-bold text-foreground uppercase tracking-wide mb-0.5">
+              Label Count Mismatch
+            </div>
+            <div className="text-xs text-muted-foreground">
+              {bulkMasters.length} master label{bulkMasters.length !== 1 ? "s" : ""} vs{" "}
+              {bulkRevised.length} revised label{bulkRevised.length !== 1 ? "s" : ""}
+            </div>
+          </div>
+        </div>
+
+        {/* Files not considered */}
+        <div>
+          <p className="text-sm text-foreground leading-relaxed mb-2">
+            The following {extraMasters.length + extraRevised.length} label
+            {extraMasters.length + extraRevised.length !== 1 ? "s" : ""} will{" "}
+            <span className="font-semibold">not be considered</span> in the analysis:
+          </p>
+          <ul className="text-xs text-muted-foreground space-y-1 border border-border rounded px-4 py-3 bg-surface-2 max-h-32 overflow-y-auto">
+            {extraMasters.map((f, i) => (
+              <li key={`m${i}`} className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-400 shrink-0" />
+                <span className="truncate">{f.name}</span>
+                <span className="ml-auto shrink-0 text-[10px] font-medium text-red-500 uppercase">Master</span>
+              </li>
+            ))}
+            {extraRevised.map((f, i) => (
+              <li key={`r${i}`} className="flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0" />
+                <span className="truncate">{f.name}</span>
+                <span className="ml-auto shrink-0 text-[10px] font-medium text-blue-500 uppercase">Revised</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Actions */}
+        <div className="flex justify-end gap-3 pt-1 border-t border-border">
+          <button
+            onClick={closeMismatchDialog}
+            className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg hover:bg-surface-2 transition-colors"
+          >
+            Re-upload
+          </button>
+          <button
+            onClick={() => { closeMismatchDialog(); dispatchRun(); }}
+            className="flex items-center gap-2 px-6 py-2.5 text-sm font-bold uppercase tracking-wider bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors shadow-sm"
+          >
+            Proceed
+            <ArrowRight className="h-4 w-4" />
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
 
   // ── Shared nav header ──────────────────────────────────────────────────────
   const header = (
@@ -134,6 +243,7 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
     const masterCount   = master  ? 1 : 0;
 
     return (
+      <>
       <div className="min-h-screen bg-[#f5f5f5] flex flex-col">
         {header}
 
@@ -333,13 +443,14 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
                     </div>
                   )}
 
-                  {mode === "bulk" && bulkMasters.length > 0 && bulkRevised.length > 0 && !bulkReady && (
+                  {mode === "bulk" && bulkMismatch && (
                     <div className="flex items-center gap-2 text-xs text-amber-700 font-semibold bg-amber-50 border border-amber-200 px-3 py-2 rounded">
-                      <span className="shrink-0">⚠</span>
-                      {bulkMasters.length} master{bulkMasters.length !== 1 ? "s" : ""} vs {bulkRevised.length} revised — counts must match
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      {bulkMasters.length} master vs {bulkRevised.length} revised —{" "}
+                      {extraMasters.length + extraRevised.length} label{extraMasters.length + extraRevised.length !== 1 ? "s" : ""} will not be considered
                     </div>
                   )}
-                  {ready && (
+                  {ready && !bulkMismatch && (
                     <div className="flex items-center gap-2 text-xs text-green-700 font-semibold bg-green-50 border border-green-200 px-3 py-2 rounded">
                       <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                       {mode === "single"
@@ -373,9 +484,7 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
           <div className="flex items-center gap-4">
             {!ready && (
               <span className="text-xs text-muted-foreground hidden sm:block">
-                {mode === "bulk" && bulkMasters.length > 0 && bulkRevised.length > 0
-                  ? `${bulkMasters.length} master${bulkMasters.length !== 1 ? "s" : ""} vs ${bulkRevised.length} revised — upload equal numbers to proceed`
-                  : "Upload both labels to enable submission"}
+                Upload both labels to enable submission
               </span>
             )}
             <button
@@ -389,11 +498,14 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
           </div>
         </div>
       </div>
+      {mismatchDialog}
+</>
     );
   }
 
   // ── Quick compare: original centered layout ────────────────────────────────
   return (
+    <>
     <div className="min-h-screen flex flex-col bg-background">
       {header}
 
@@ -438,15 +550,19 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
               <DropZone label="Revised label" file={revised} onFile={setRevised} onClear={() => setRevised(null)} variant="revised" />
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <MultiDropZone label="Master labels" files={bulkMasters} onFiles={setBulkMasters} variant="master" />
-              <MultiDropZone label="Revised labels" files={bulkRevised} onFiles={setBulkRevised} variant="revised" />
+            <div className="space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                <MultiDropZone label="Master labels" files={bulkMasters} onFiles={setBulkMasters} variant="master" />
+                <MultiDropZone label="Revised labels" files={bulkRevised} onFiles={setBulkRevised} variant="revised" />
+              </div>
             </div>
           )}
 
-          {mode === "bulk" && bulkMasters.length > 0 && bulkRevised.length > 0 && !bulkReady && (
-            <div className="mt-4 text-center text-xs text-amber-700 font-medium">
-              ⚠ {bulkMasters.length} master{bulkMasters.length !== 1 ? "s" : ""} vs {bulkRevised.length} revised — upload equal numbers to enable comparison
+          {mode === "bulk" && bulkMismatch && (
+            <div className="mt-4 flex items-center justify-center gap-2 text-xs text-amber-700 font-medium">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              {bulkMasters.length} master vs {bulkRevised.length} revised —{" "}
+              {extraMasters.length + extraRevised.length} label{extraMasters.length + extraRevised.length !== 1 ? "s" : ""} will not be considered
             </div>
           )}
           <div className="mt-4 flex justify-center">
@@ -465,10 +581,106 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
         Deterministic · No ML · Audit-ready
       </footer>
     </div>
+    {mismatchDialog}
+    </>
   );
 }
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
+
+function BulkPairingTable({
+  masters,
+  revised,
+  pairCount,
+}: {
+  masters: UploadedFile[];
+  revised: UploadedFile[];
+  pairCount: number;
+}) {
+  if (masters.length === 0 || revised.length === 0) return null;
+
+  const extraMasters = masters.slice(pairCount);
+  const extraRevised = revised.slice(pairCount);
+
+  return (
+    <div className="border border-border rounded overflow-hidden bg-white shadow-sm">
+      {/* Table header */}
+      <div className="px-4 py-2 bg-surface-2 border-b border-border flex items-center justify-between">
+        <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+          Paired Labels
+        </span>
+        <span className="text-[10px] font-bold text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+          {pairCount} pair{pairCount !== 1 ? "s" : ""}
+        </span>
+      </div>
+
+      <table className="w-full text-xs border-collapse">
+        <thead>
+          <tr className="border-b border-border bg-surface-2/50">
+            <th className="px-3 py-1.5 text-left text-[9px] font-bold uppercase tracking-widest text-muted-foreground w-8">#</th>
+            <th className="px-3 py-1.5 text-left text-[9px] font-bold uppercase tracking-widest text-red-500">Master</th>
+            <th className="px-2 py-1.5 text-center w-6 text-muted-foreground"></th>
+            <th className="px-3 py-1.5 text-left text-[9px] font-bold uppercase tracking-widest text-blue-500">Revised</th>
+          </tr>
+        </thead>
+        <tbody>
+          {Array.from({ length: pairCount }, (_, i) => (
+            <tr key={i} className="border-b border-gray-50 last:border-0 hover:bg-surface-2/40 transition-colors">
+              <td className="px-3 py-2">
+                <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center text-[9px] font-bold text-white shrink-0">
+                  {i + 1}
+                </div>
+              </td>
+              <td className="px-3 py-2 max-w-0 w-[45%]">
+                <span className="block truncate font-medium text-foreground" title={masters[i].name}>
+                  {masters[i].name}
+                </span>
+              </td>
+              <td className="px-2 py-2 text-center font-bold text-primary text-xs">↔</td>
+              <td className="px-3 py-2 max-w-0 w-[45%]">
+                <span className="block truncate font-medium text-foreground" title={revised[i].name}>
+                  {revised[i].name}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Index-based pairing note */}
+      <div className="px-4 py-2 bg-blue-50 border-t border-blue-100 text-[10px] text-blue-700 leading-relaxed">
+        <span className="font-bold uppercase tracking-wide">Pairing order:</span>{" "}
+        Labels are matched by upload position (1st master ↔ 1st revised, 2nd ↔ 2nd, …).
+        Ensure files are uploaded in the correct sequence before proceeding.
+      </div>
+
+      {/* Not considered section */}
+      {(extraMasters.length > 0 || extraRevised.length > 0) && (
+        <div className="border-t border-amber-200 bg-amber-50 px-4 py-2.5">
+          <div className="text-[9px] font-bold uppercase tracking-widest text-amber-600 mb-1.5">
+            Not Considered
+          </div>
+          <div className="flex flex-col gap-1">
+            {extraMasters.map((f, i) => (
+              <div key={`m${i}`} className="flex items-center gap-2 text-[11px] text-amber-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-red-400 shrink-0" />
+                <span className="truncate">{f.name}</span>
+                <span className="ml-auto text-[9px] font-bold text-red-500 uppercase shrink-0">Master</span>
+              </div>
+            ))}
+            {extraRevised.map((f, i) => (
+              <div key={`r${i}`} className="flex items-center gap-2 text-[11px] text-amber-700">
+                <span className="h-1.5 w-1.5 rounded-full bg-blue-400 shrink-0" />
+                <span className="truncate">{f.name}</span>
+                <span className="ml-auto text-[9px] font-bold text-blue-500 uppercase shrink-0">Revised</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function formatBytes(bytes: number) {
   if (bytes === 0) return "0 B";
@@ -504,11 +716,34 @@ function DropZone({
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [hover, setHover] = useState(false);
+  const [pageError, setPageError] = useState<string | null>(null);
 
-  const handleFiles = (files: FileList | null) => {
+  // Revoke the blob URL when the file is replaced or the component unmounts to
+  // prevent memory leaks from accumulating object URLs across repeated uploads.
+  useEffect(() => {
+    const url = file?.url;
+    return () => {
+      if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+    };
+  }, [file?.url]);
+
+  const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const f = files[0];
+    setPageError(null);
+    if (f.name.toLowerCase().endsWith(".pdf")) {
+      const pageCount = await getPdfPageCount(f);
+      if (pageCount !== undefined && pageCount > 1) {
+        setPageError(`This PDF has ${pageCount} pages — use Bulk upload for multi-label files.`);
+        return;
+      }
+    }
     onFile({ name: f.name, size: f.size, url: URL.createObjectURL(f), file: f });
+  };
+
+  const handleClear = () => {
+    setPageError(null);
+    onClear();
   };
 
   const accentColor = variant === "master" ? "#DC2626" : "#2563EB";
@@ -543,14 +778,22 @@ function DropZone({
             <div className="text-sm text-foreground truncate">{file.name}</div>
             <div className="text-xs text-muted-foreground">{formatBytes(file.size)}</div>
           </div>
-          <button onClick={onClear} className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" aria-label="Remove">
+          <button onClick={handleClear} className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" aria-label="Remove">
             <X className="h-4 w-4" />
           </button>
+        </div>
+      )}
+      {pageError && (
+        <div className="mt-2 flex items-center gap-2 text-xs text-red-600 font-medium bg-red-50 border border-red-200 px-3 py-2 rounded">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          {pageError}
         </div>
       )}
     </div>
   );
 }
+
+const BULK_MAX_FILES = 5;
 
 function MultiDropZone({
   label, files, onFiles, variant, compact = false,
@@ -564,31 +807,57 @@ function MultiDropZone({
   const inputRef = useRef<HTMLInputElement>(null);
   const [hover, setHover] = useState(false);
   const accentColor = variant === "master" ? "#DC2626" : "#2563EB";
+  const atLimit = files.length >= BULK_MAX_FILES;
 
-  const handleFiles = (list: FileList | null) => {
+  // Keep a ref to the latest files array so the unmount cleanup can revoke
+  // any blob URLs that were never explicitly removed.
+  const filesRef = useRef(files);
+  filesRef.current = files;
+  useEffect(() => {
+    return () => {
+      filesRef.current.forEach((f) => {
+        if (f.url?.startsWith("blob:")) URL.revokeObjectURL(f.url);
+      });
+    };
+  }, []);
+
+  const handleFiles = async (list: FileList | null) => {
     if (!list) return;
-    const arr = Array.from(list).map((f) => ({ name: f.name, size: f.size, url: URL.createObjectURL(f), file: f }));
+    const slots = BULK_MAX_FILES - files.length;
+    if (slots <= 0) return;
+    const raw = Array.from(list).slice(0, slots);
+    const pageCounts = await Promise.all(raw.map(getPdfPageCount));
+    const arr = raw.map((f, i) => ({
+      name: f.name,
+      size: f.size,
+      url: URL.createObjectURL(f),
+      file: f,
+      pageCount: pageCounts[i],
+    }));
     onFiles([...files, ...arr]);
   };
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-2">
-        <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: accentColor }} />
-        <div className="text-xs font-medium uppercase tracking-wide" style={{ color: accentColor }}>{label}</div>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <span className="h-2 w-2 rounded-full flex-shrink-0" style={{ backgroundColor: accentColor }} />
+          <div className="text-xs font-medium uppercase tracking-wide" style={{ color: accentColor }}>{label}</div>
+        </div>
+        <span className="text-[10px] text-muted-foreground font-medium">{files.length} / {BULK_MAX_FILES}</span>
       </div>
 
       <div
-        onDragOver={(e) => { e.preventDefault(); setHover(true); }}
+        onDragOver={(e) => { e.preventDefault(); if (!atLimit) setHover(true); }}
         onDragLeave={() => setHover(false)}
         onDrop={(e) => { e.preventDefault(); setHover(false); handleFiles(e.dataTransfer.files); }}
-        onClick={() => inputRef.current?.click()}
-        className={`bg-surface border border-dashed rounded-md flex flex-col items-center justify-center cursor-pointer transition-colors ${compact ? "h-24" : "h-36"}`}
+        onClick={() => { if (!atLimit) inputRef.current?.click(); }}
+        className={`bg-surface border border-dashed rounded-md flex flex-col items-center justify-center transition-colors ${compact ? "h-24" : "h-36"} ${atLimit ? "opacity-40 cursor-not-allowed" : "cursor-pointer"}`}
         style={{ borderColor: hover ? accentColor : undefined, borderLeft: `3px solid ${accentColor}` }}
       >
         <Upload className="h-5 w-5 mb-2 text-muted-foreground" />
-        <div className="text-sm text-foreground">Add more files</div>
-        <div className="text-xs text-muted-foreground mt-0.5">PDF or PNG</div>
+        <div className="text-sm text-foreground">{atLimit ? `Limit reached (${BULK_MAX_FILES})` : "Add more files"}</div>
+        <div className="text-xs text-muted-foreground mt-0.5">{atLimit ? "" : "PDF or PNG"}</div>
         <input ref={inputRef} type="file" multiple accept=".pdf,.png,application/pdf,image/png" className="hidden" onChange={(e) => handleFiles(e.target.files)} />
       </div>
 
@@ -601,9 +870,19 @@ function MultiDropZone({
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-xs text-foreground truncate">{f.name}</div>
-                <div className="text-[10px] text-muted-foreground">{formatBytes(f.size)}</div>
+                <div className="text-[10px] text-muted-foreground flex items-center gap-1.5">
+                  <span>{formatBytes(f.size)}</span>
+                  {f.pageCount !== undefined && (
+                    <>
+                      <span className="text-muted-foreground/40">·</span>
+                      <span className="font-medium" style={{ color: accentColor }}>
+                        {f.pageCount} {f.pageCount === 1 ? "page" : "pages"}
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
-              <button onClick={() => onFiles(files.filter((_, j) => j !== i))} className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" aria-label="Remove">
+              <button onClick={() => { if (f.url?.startsWith("blob:")) URL.revokeObjectURL(f.url); onFiles(files.filter((_, j) => j !== i)); }} className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0" aria-label="Remove">
                 <X className="h-3.5 w-3.5" />
               </button>
             </div>
