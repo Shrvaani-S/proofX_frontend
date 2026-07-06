@@ -151,14 +151,18 @@ const AnalysisProgressModal = ({
     onComplete?.();
   }, [apiDone, completed, total, isOpen, isBulk, onComplete]);
 
-  if (!isOpen) return null;
-
-  const activePair = bulkPairNames?.[completed] ?? null;
+  // Must run on every render regardless of isOpen — a hook may never sit
+  // after an early return (Rules of Hooks), or the hook count differs
+  // between an open and a closed render.
   const activeBoxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     activeBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [completed]);
+
+  if (!isOpen) return null;
+
+  const activePair = bulkPairNames?.[completed] ?? null;
 
   return (
     <div className="fixed inset-0 bg-black/30 backdrop-blur-[2px] z-[100] flex items-center justify-center">
