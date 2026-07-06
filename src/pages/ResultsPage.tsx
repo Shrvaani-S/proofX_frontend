@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, ArrowLeft, Home, Maximize2, ScanLine, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Home, Loader2, Maximize2, ScanLine, X } from "lucide-react";
 import { LabelImage } from "@/components/LabelImage";
 import { exportPDF } from "@/report/ExportModal";
 // import { ExportModal } from "@/report/ExportModal"; // TODO: Re-enable for full export modal UI
@@ -21,12 +21,20 @@ interface Props {
   reconciliationByPair?: Record<string, ReconciliationOverrides>;
   /** Warning shown when some pairs were skipped (e.g. alignment flagged). */
   partialError?: string;
+  /** Called whenever the displayed pair is a bulk-mode skeleton that hasn't
+   *  been fetched yet (see App.tsx's loadBulkPairDetail) — fires on the
+   *  initial pair on mount and again whenever the user switches to another
+   *  unloaded pair. No-op for already-loaded (or single-mode) pairs. */
+  onSelectPair?: (pair: LabelPair) => void;
+  /** Pair ids currently being fetched, so the sidebar/main panel can show a
+   *  spinner instead of the empty skeleton. */
+  loadingPairIds?: Set<string>;
   onBack: () => void;
   onHome?: () => void;
 }
 
 
-export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliationByPair, partialError, onBack, onHome }: Props) {
+export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliationByPair, partialError, onSelectPair, loadingPairIds, onBack, onHome }: Props) {
   const [partialErrorDismissed, setPartialErrorDismissed] = useState(false);
   const [activePairId, setActivePairId] = useState(pairs[0].id);
   const [activeCats, setActiveCats] = useState<Set<Category | "all">>(
@@ -155,6 +163,15 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
     revisedRef.current?.scrollTo({ top: 0, left: 0 });
   }, [activePairId]);
 
+  // Lazily fetch a bulk pair's full report + images the moment it's actually
+  // viewed — covers both the initially-selected pair on mount and switching to
+  // another unloaded pair via the sidebar. No-op once loaded (or for
+  // single-mode pairs, which never carry a bulkRef).
+  useEffect(() => {
+    if (!pair.loaded && !pair.loadError) onSelectPair?.(pair);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pair.id, pair.loaded]);
+
   // Window-level handler is the only reliable way to intercept Ctrl+scroll before
   // the browser processes it as a page zoom (element-level listeners fire too late
   // in Chromium's compositor pipeline).
@@ -258,7 +275,10 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
             <div className="flex-1 overflow-y-auto">
               {pairs.map((p) => {
                 const active = p.id === activePairId;
-                const count = p.findings.length;
+                // Before a pair is loaded, fall back to the lightweight count
+                // the bulk-status summary already carried.
+                const count = p.loaded ? p.findings.length : (p.findingsCount ?? 0);
+                const isLoading = loadingPairIds?.has(p.id) ?? false;
                 return (
                   <button
                     key={p.id}
@@ -275,7 +295,11 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
                         vs {p.revisedName}
                       </span>
                     </span>
-                    {p.alignmentFlagged
+                    {isLoading
+                      ? <Loader2 className="ml-2 h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+                      : p.loadError
+                      ? <AlertTriangle className="ml-2 h-3.5 w-3.5 shrink-0 text-red-500" />
+                      : p.alignmentFlagged
                       ? <AlertTriangle className="ml-2 h-3.5 w-3.5 shrink-0 text-amber-500" />
                       : <span
                           className="ml-2 text-[11px] px-1.5 py-0.5 rounded-full text-white font-medium shrink-0"
@@ -303,47 +327,71 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
             </div>
           )}
         <div className="flex-1 flex min-w-0 min-h-0">
-          <LabelPanel
-            title={pair.masterName}
-            version={`Master · ${pair.masterVersion}`}
-            variant="master"
-            pair={pair}
-            canvasW={canvasW}
-            canvasH={canvasH}
-            findings={visibleFindings}
-            selectedFinding={selectedFinding}
-            hoveredFindingId={hoveredFindingId}
-            pulseKey={pulseKey}
-            zoom={masterZoom}
-            scrollRef={masterRef}
-            cardRef={masterCardRef}
-            fileUrl={pair.masterUrl}
-            onReset={handleResetMasterZoom}
-            onMouseEnter={() => setHoveredPanel("master")}
-            onMouseLeave={() => setHoveredPanel(null)}
-          />
-          {/* Explicit 2px divider: a 1px theme border (#E0E0E0 on #F1F3F4) is
-              near-invisible and sub-pixel-rounds away on scaled/HiDPI monitors. */}
-          <div className="w-1 flex-shrink-0 self-stretch" style={{ backgroundColor: "#1C2E59" }} aria-hidden />
-          <LabelPanel
-            title={pair.revisedName}
-            version={`Revised · ${pair.revisedVersion}`}
-            variant="revised"
-            pair={pair}
-            canvasW={canvasW}
-            canvasH={canvasH}
-            findings={visibleFindings}
-            selectedFinding={selectedFinding}
-            hoveredFindingId={hoveredFindingId}
-            pulseKey={pulseKey}
-            zoom={revisedZoom}
-            scrollRef={revisedRef}
-            cardRef={revisedCardRef}
-            fileUrl={pair.revisedUrl}
-            onReset={handleResetRevisedZoom}
-            onMouseEnter={() => setHoveredPanel("revised")}
-            onMouseLeave={() => setHoveredPanel(null)}
-          />
+          {!pair.loaded ? (
+            <div className="flex-1 flex items-center justify-center">
+              {pair.loadError ? (
+                <div className="flex flex-col items-center gap-3 text-center px-6 max-w-xs">
+                  <AlertTriangle className="h-6 w-6 text-red-500 shrink-0" />
+                  <p className="text-sm text-foreground">Failed to load this label: {pair.loadError}</p>
+                  <button
+                    onClick={() => onSelectPair?.(pair)}
+                    className="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider rounded border border-border hover:bg-surface-2 transition-colors"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                  <Loader2 className="h-6 w-6 animate-spin" />
+                  <p className="text-sm">Loading label…</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <LabelPanel
+                title={pair.masterName}
+                version={`Master · ${pair.masterVersion}`}
+                variant="master"
+                pair={pair}
+                canvasW={canvasW}
+                canvasH={canvasH}
+                findings={visibleFindings}
+                selectedFinding={selectedFinding}
+                hoveredFindingId={hoveredFindingId}
+                pulseKey={pulseKey}
+                zoom={masterZoom}
+                scrollRef={masterRef}
+                cardRef={masterCardRef}
+                fileUrl={pair.masterUrl}
+                onReset={handleResetMasterZoom}
+                onMouseEnter={() => setHoveredPanel("master")}
+                onMouseLeave={() => setHoveredPanel(null)}
+              />
+              {/* Explicit 2px divider: a 1px theme border (#E0E0E0 on #F1F3F4) is
+                  near-invisible and sub-pixel-rounds away on scaled/HiDPI monitors. */}
+              <div className="w-1 flex-shrink-0 self-stretch" style={{ backgroundColor: "#1C2E59" }} aria-hidden />
+              <LabelPanel
+                title={pair.revisedName}
+                version={`Revised · ${pair.revisedVersion}`}
+                variant="revised"
+                pair={pair}
+                canvasW={canvasW}
+                canvasH={canvasH}
+                findings={visibleFindings}
+                selectedFinding={selectedFinding}
+                hoveredFindingId={hoveredFindingId}
+                pulseKey={pulseKey}
+                zoom={revisedZoom}
+                scrollRef={revisedRef}
+                cardRef={revisedCardRef}
+                fileUrl={pair.revisedUrl}
+                onReset={handleResetRevisedZoom}
+                onMouseEnter={() => setHoveredPanel("revised")}
+                onMouseLeave={() => setHoveredPanel(null)}
+              />
+            </>
+          )}
         </div>
         </div>
 
@@ -413,7 +461,11 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
             )}
           </div>
           <div className="flex-1 overflow-y-auto">
-            {CATEGORIES.map((cat) => {
+            {!pair.loaded ? (
+              <div className="px-5 py-4 text-xs text-muted-foreground italic">
+                {pair.loadError ? "Couldn't load findings for this label." : "Loading findings…"}
+              </div>
+            ) : CATEGORIES.map((cat) => {
               if (!activeCats.has("all") && !activeCats.has(cat.id)) return null;
               const items = visibleFindings.filter((f) => f.category === cat.id);
               return (

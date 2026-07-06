@@ -34,4 +34,19 @@ export interface LabelPair {
   /** True when the backend flagged this pair for a variable shift in alignment.
    *  The pair is still shown in results but findings may be unreliable. */
   alignmentFlagged?: boolean;
+  /** False for a bulk-mode pair whose full findings/images haven't been
+   *  fetched yet (see `bulkRef`) — fetched lazily when the user views it,
+   *  rather than all at once when the batch finishes. Single-mode and history
+   *  pairs are always fully loaded, so they omit this (treated as true). */
+  loaded?: boolean;
+  /** Findings count from the lightweight bulk-status summary, shown in the
+   *  sidebar badge before the full `findings` array has been loaded. */
+  findingsCount?: number;
+  /** Set if the on-demand fetch for this pair failed; surfaced with a retry
+   *  affordance instead of silently showing an empty/mock label. */
+  loadError?: string;
+  /** Coordinates needed to lazily fetch this pair's full report + images.
+   *  Bulk mode only — absent for single-mode/history pairs, which already
+   *  carry everything up front. */
+  bulkRef?: { jobId: string; fileIndex: number; pageIndex: number };
 }

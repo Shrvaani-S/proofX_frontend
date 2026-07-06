@@ -93,6 +93,10 @@ export default function App() {
     reconciliation: Record<string, ReconciliationOverrides>;
     partialError?: string;
   } | null>(null);
+  // Bulk-mode pairs the user hasn't viewed yet start as unloaded skeletons
+  // (see proceedBulk); this tracks which ones currently have an in-flight
+  // fetch so ResultsPage can show a spinner and so a pair is never fetched twice.
+  const [loadingPairIds, setLoadingPairIds] = useState<Set<string>>(new Set());
 
   const handleAnalysisComplete = () => {
     if (!pendingResults) return;
@@ -112,6 +116,13 @@ export default function App() {
   // Poll a bulk job until `until` holds (or it errors), reporting progress on
   // every tick. A generation guard drops stale callbacks from a superseded run;
   // a few consecutive network failures are tolerated before giving up.
+  //
+  // Each tick only asks the backend for the `results`/`excluded` entries
+  // appended since the previous tick (see getBulkStatus's resultsSince/
+  // excludedSince cursors) instead of the whole accumulated list every time —
+  // otherwise a large batch's poll responses grow throughout the run. The
+  // deltas are merged into local accumulators here, so `onProgress`/the
+  // resolved status still expose the full lists callers already expect.
   const pollBulk = (
     jobId: string,
     until: (s: BulkJobStatus) => boolean,
@@ -120,15 +131,24 @@ export default function App() {
     const POLL_MS = 2000;
     const MAX_CONSECUTIVE_POLL_FAILURES = 3;
     let consecutivePollFailures = 0;
+    let resultsSince = 0;
+    let excludedSince = 0;
+    let allResults: BulkJobStatus["results"] = [];
+    let allExcluded: BulkExcludedPage[] = [];
     pollGenerationRef.current += 1;
     const myGeneration = pollGenerationRef.current;
     return new Promise<BulkJobStatus>((resolve, reject) => {
       const poll = async () => {
         if (pollGenerationRef.current !== myGeneration) return;
         try {
-          const status = await getBulkStatus(jobId);
+          const delta = await getBulkStatus(jobId, { resultsSince, excludedSince });
           if (pollGenerationRef.current !== myGeneration) return;
           consecutivePollFailures = 0;
+          allResults = allResults.concat(delta.results);
+          allExcluded = allExcluded.concat(delta.excluded);
+          resultsSince = delta.compare.completed + delta.compare.failed;
+          excludedSince = delta.excluded_count;
+          const status: BulkJobStatus = { ...delta, results: allResults, excluded: allExcluded };
           onProgress(status);
           if (status.status === "error") {
             reject(new Error(status.error ?? "bulk job failed"));
@@ -308,8 +328,11 @@ export default function App() {
     }
   };
 
-  // Bulk PHASE B — user clicked Proceed: compare the survivors, then pull each
-  // page's report + images and render.
+  // Bulk PHASE B — user clicked Proceed: compare the survivors. Pairs are
+  // staged as unloaded skeletons (name + finding count, both already present
+  // in the lightweight summary) — the full report + images are fetched lazily,
+  // one pair at a time, only once the user actually views it. See
+  // loadBulkPairDetail, wired to ResultsPage's onSelectPair.
   const proceedBulk = async () => {
     if (!bulkConfirm) return;
     const { jobId, willCompareCount } = bulkConfirm;
@@ -341,48 +364,91 @@ export default function App() {
         (s) => setBulkProgress({ completed: s.compare.completed + s.compare.failed, total: s.compare.total }),
       );
 
-      // Join each summary with its full report + fetched images (the response
-      // no longer carries them inline).
-      const results: BulkPairResult[] = [];
+      // Count how many results share each file_index — files with more than
+      // one entry are multi-page PDFs and need a page label in the sidebar
+      // (same convention as finishResults, single mode's builder).
+      const pageCountByFile = new Map<number, number>();
       for (const r of finalStatus.results) {
-        if (r.status !== "done" || r.page_index == null) {
-          results.push({
-            file_index: r.file_index,
-            page_index: r.page_index,
-            run_id: "",
-            status: "error",
-            base_name: r.base_name,
-            revised_name: r.revised_name,
-            error: r.error ?? "comparison failed",
-          });
-          continue;
+        if (r.status === "done") {
+          pageCountByFile.set(r.file_index, (pageCountByFile.get(r.file_index) ?? 0) + 1);
         }
-        const [detail, baseB64, revisedB64] = await Promise.all([
-          getBulkResult(jobId, r.file_index, r.page_index),
-          fetchBulkImageBase64(jobId, r.file_index, r.page_index, "base"),
-          fetchBulkImageBase64(jobId, r.file_index, r.page_index, "revised"),
-        ]);
-        results.push({
-          file_index: r.file_index,
-          page_index: r.page_index,
-          run_id: "",
-          status: "done",
-          base_name: r.base_name,
-          revised_name: r.revised_name,
-          combined_report: detail.combined_report,
-          notes: detail.notes,
-          comparison_inputs: detail.comparison_inputs,
-          base_image_png_base64: baseB64,
-          revised_image_png_base64: revisedB64,
-          proof_png_base64: "",
-        });
       }
-      await finishResults(results);
+
+      const nextPairs: LabelPair[] = [];
+      const errors: string[] = [];
+      finalStatus.results.forEach((r, idx) => {
+        if (r.status !== "done" || r.page_index == null) {
+          errors.push(`${r.base_name}: ${r.error ?? "comparison failed"}`);
+          return;
+        }
+        const isMultiPage = (pageCountByFile.get(r.file_index) ?? 1) > 1;
+        const pageLabel = isMultiPage ? ` (page ${r.page_index + 1})` : "";
+        nextPairs.push({
+          id: `p${idx + 1}`,
+          name: r.base_name.replace(/\.[^/.]+$/, ""),
+          masterName: `${r.base_name}${pageLabel}`,
+          revisedName: `${r.revised_name}${pageLabel}`,
+          masterVersion: "base",
+          revisedVersion: "revised",
+          findings: [],
+          findingsCount: r.findings_total ?? 0,
+          alignmentFlagged: r.alignment_status === "FLAGGED",
+          loaded: false,
+          bulkRef: { jobId, fileIndex: r.file_index, pageIndex: r.page_index },
+        });
+      });
+
+      if (nextPairs.length === 0 && errors.length > 0) {
+        throw new Error(errors.join("; "));
+      }
+
+      setPendingResults({
+        pairs: nextPairs,
+        reconciliation: {},
+        partialError: errors.length > 0 ? `${errors.length} pair(s) failed: ${errors.join("; ")}` : undefined,
+      });
     } catch (err) {
       setRunError(err instanceof Error ? err.message : String(err));
       setBulkProgress(null);
       setPendingResults(null);
       setStage("upload");
+    }
+  };
+
+  // Fetch one bulk pair's full report + images on demand — called by
+  // ResultsPage (via onSelectPair) when the user views a pair that's still an
+  // unloaded skeleton. Replaces the old fetch-everything-up-front approach.
+  const loadBulkPairDetail = async (pair: LabelPair) => {
+    if (pair.loaded || !pair.bulkRef || loadingPairIds.has(pair.id)) return;
+    const { jobId, fileIndex, pageIndex } = pair.bulkRef;
+    setLoadingPairIds((prev) => new Set(prev).add(pair.id));
+    try {
+      const [detail, baseB64, revisedB64] = await Promise.all([
+        getBulkResult(jobId, fileIndex, pageIndex),
+        fetchBulkImageBase64(jobId, fileIndex, pageIndex, "base"),
+        fetchBulkImageBase64(jobId, fileIndex, pageIndex, "revised"),
+      ]);
+      const { pair: loadedPair } = buildLabelPair(pair.id, pair.masterName, pair.revisedName, {
+        run_id: "",
+        combined_report: detail.combined_report,
+        notes: detail.notes,
+        comparison_inputs: detail.comparison_inputs,
+        proof_png_base64: "",
+        base_image_png_base64: baseB64,
+        revised_image_png_base64: revisedB64,
+      });
+      loadedPair.loaded = true;
+      if (detail.combined_report.alignment_status === "FLAGGED") loadedPair.alignmentFlagged = true;
+      setPairs((prev) => prev.map((p) => (p.id === pair.id ? loadedPair : p)));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setPairs((prev) => prev.map((p) => (p.id === pair.id ? { ...p, loadError: message } : p)));
+    } finally {
+      setLoadingPairIds((prev) => {
+        const next = new Set(prev);
+        next.delete(pair.id);
+        return next;
+      });
     }
   };
 
@@ -457,6 +523,8 @@ export default function App() {
         isLrfWorkflow={lrfData !== null}
         reconciliationByPair={reconciliationByPair}
         partialError={runError ?? undefined}
+        onSelectPair={loadBulkPairDetail}
+        loadingPairIds={loadingPairIds}
         onBack={lrfData !== null ? () => setStage("upload") : () => setStage("home")}
         onHome={() => setStage("home")}
       />
