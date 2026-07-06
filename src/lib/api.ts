@@ -6,7 +6,7 @@
 if (import.meta.env.PROD && !import.meta.env.VITE_API_BASE_URL) {
   throw new Error("[ProofX] VITE_API_BASE_URL is not set. Configure it in your .env file before building for production.");
 }
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://label-comparator-new.azurewebsites.net";
 
 export interface BackendFinding {
   id: number;
@@ -64,9 +64,22 @@ export interface ReconcileRequirement {
   match_type?: string;
 }
 
+/** LRF session metadata forwarded to the backend so it can persist them
+ *  alongside the run and return them in future history-report fetches. */
+export interface ReconcileLRFMetadata {
+  requested_by?: string;
+  cr_number?: string;
+  part_number?: string;
+  product_name?: string;
+  label_version?: string;
+  date?: string;
+}
+
 export interface ReconcileLRF {
   lrf_id: string;
   requirements: ReconcileRequirement[];
+  /** Optional — backend stores these and returns them in HistoryReport. */
+  metadata?: ReconcileLRFMetadata;
 }
 
 /** A reference image to upload alongside a reconcile() call — `name` must match
@@ -176,8 +189,8 @@ export interface BulkPageReport {
 export interface BulkPairResult {
   file_index: number;
   page_index: number | null;
-  run_id: string; // empty for bulk pages (no per-page run_store id)
-  status: "done" | "error";
+  run_id: string;
+  status: "done" | "error" | "skipped_page_mismatch";
   base_name: string;
   revised_name: string;
   combined_report?: CombinedReport;
@@ -465,7 +478,6 @@ export async function fetchBulkImageBase64(
   }
   return blobToBase64(await res.blob());
 }
-
 export async function reconcile(
   runId: string,
   lrf: ReconcileLRF,
@@ -525,6 +537,11 @@ export interface HistoryReport {
   base_image_png_base64: string;
   revised_image_png_base64: string;
   reconcile_report: ReconcileReport | null;
+  /** Populated once the backend stores LRF metadata on the reconcile call. */
+  requested_by?: string | null;
+  cr_number?: string | null;
+  part_number?: string | null;
+  product_name?: string | null;
 }
 
 export interface HistoryResponse {
@@ -562,7 +579,10 @@ export async function getHistoryReport(runId: string): Promise<HistoryReport> {
   const res = await fetch(`${API_BASE_URL}/api/history/${runId}/report`, {
     headers: authHeaders(),
   });
-  if (!res.ok) throw new Error(`report fetch failed: ${await parseErrorDetail(res)}`);
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`report fetch failed: ${await parseErrorDetail(res)}`);
+  }
   return res.json();
 }
 

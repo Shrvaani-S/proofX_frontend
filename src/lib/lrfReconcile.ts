@@ -17,7 +17,7 @@
 // existing client-side classifyFinding heuristic in utils/lrfClassify.ts.
 
 import type { LRFData } from "@/types/lrf";
-import type { ReconcileLRF, ReconcileReport, ReconcileRequirement, RefImageUpload } from "@/lib/api";
+import type { ReconcileLRF, ReconcileLRFMetadata, ReconcileReport, ReconcileRequirement, RefImageUpload } from "@/lib/api";
 
 const ATTRIBUTE_TO_BACKEND_FIELD: Record<string, "address" | "authorized_rep" | "eifu_link"> = {
   manufacturer_addr: "address",
@@ -80,7 +80,20 @@ export function buildReconcileLRF(lrfData: LRFData, lrfId: string): ReconcileLRF
     });
   }
 
-  return { lrf: requirements.length > 0 ? { lrf_id: lrfId, requirements } : null, refImages };
+  // Forward LRF session metadata so the backend can persist it with the run.
+  const metadata: ReconcileLRFMetadata = {};
+  if (lrfData.metadata.requestedBy) metadata.requested_by = lrfData.metadata.requestedBy;
+  if (lrfData.metadata.crNumber)    metadata.cr_number    = lrfData.metadata.crNumber;
+  if (lrfData.metadata.partNumber)  metadata.part_number  = lrfData.metadata.partNumber;
+  if (lrfData.metadata.productName) metadata.product_name = lrfData.metadata.productName;
+  if (lrfData.metadata.labelVersion) metadata.label_version = lrfData.metadata.labelVersion;
+  if (lrfData.metadata.date)        metadata.date         = lrfData.metadata.date;
+
+  const lrf = requirements.length > 0
+    ? { lrf_id: lrfId, requirements, metadata }
+    : null;
+
+  return { lrf, refImages };
 }
 
 export interface ReconciliationOverrides {

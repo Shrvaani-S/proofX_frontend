@@ -19,9 +19,10 @@ interface Props {
   onSkip:       () => void;
   onBack?:      () => void;
   initialData?: LRFData | null;
+  nextLabel?:   string;
 }
 
-export function LRFPage({ onNext, onSkip, onBack, initialData }: Props) {
+export function LRFPage({ onNext, onSkip, onBack, initialData, nextLabel }: Props) {
   const [crNumber,      setCrNumber]      = useState(initialData?.metadata.crNumber ?? "");
   const [partNumber,    setPartNumber]    = useState(initialData?.metadata.partNumber ?? "");
   const [productName,   setProductName]   = useState(initialData?.metadata.productName ?? "");
@@ -426,7 +427,7 @@ export function LRFPage({ onNext, onSkip, onBack, initialData }: Props) {
             onClick={handleNext}
             className="flex items-center gap-2 bg-primary px-8 py-3 text-sm font-bold text-white hover:opacity-90 transition-opacity uppercase tracking-wider rounded-lg shadow-md"
           >
-            Next: Upload Labels
+            {nextLabel || "Next: Upload Labels"}
             <ArrowRight size={14} />
           </button>
         </div>

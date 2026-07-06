@@ -13,7 +13,9 @@
       "Bash(cp components/ExportModal.tsx report/ExportModal.tsx)",
       "Bash(cp styles.css index.css)",
       "Bash(npm run:*)",
-      "Bash(xargs grep:*)"
+      "Bash(xargs grep:*)",
+      "Bash(powershell -Command \"Get-Command -Name '*pdf*','*ghost*','*mupdf*','*mutool*','*magick*','*convert*' -ErrorAction SilentlyContinue | Select-Object Name, Source\")",
+      "Bash(del:*)"
     ]
   }
 }

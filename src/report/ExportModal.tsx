@@ -7,7 +7,7 @@ import html2canvas from "html2canvas";
 import * as pdfjsLib from "pdfjs-dist";
 import workerSrc from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { CATEGORIES } from "@/constants";
-import type { LabelPair } from "@/types/label";
+import type { LabelPair, Finding } from "@/types/label";
 import type { LRFData } from "@/types/lrf";
 import { classifyFinding } from "@/utils/lrfClassify";
 import { LRF_ATTRIBUTE_LOOKUP } from "@/data/lrfAttributes";
@@ -251,23 +251,23 @@ export async function exportPDF(
   const doc       = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const navy      = [28, 46, 89]    as [number, number, number];
   const orange    = [240, 121, 34]  as [number, number, number];
-  const lightGray = [245, 246, 248] as [number, number, number];
+  const lightGray = [248, 249, 250] as [number, number, number];
   const green     = [29, 158, 117]  as [number, number, number];
   const red       = [220, 38, 38]   as [number, number, number];
   const W         = 210;
   const H         = 297;
-  const ML        = 14;
+  const ML        = 12;
   const usableW   = W - ML * 2;
 
   // ── Report IDs ───────────────────────────────────────────────────────────
-  const reportId    = generateReportId();
-  const proofingIds = exportPairs.map((_, i) => `${reportId}_${i + 1}`);
+  const reportId = generateReportId();
+  // proofingIds are computed after pair pages so IDs match actual PDF page numbers
   const showStatus  = !!(isLrfWorkflow && lrfData);
 
   // Pre-compute LRF verdicts per pair
   const pairStatuses   = exportPairs.map((pair) => {
     if (!showStatus) return null;
-    return pair.findings.some((f) => classifyFinding(f, lrfData!) === "unexpected") ? "FAIL" : "PASS";
+    return pair.findings.some((f) => classifyFinding(f, lrfData!) === "unexpected") ? "Fail" : "Pass";
   });
   const pairExpected   = exportPairs.map((pair) =>
     showStatus ? pair.findings.filter((f) => classifyFinding(f, lrfData!) === "expected").length : 0,
@@ -277,20 +277,24 @@ export async function exportPDF(
   );
 
   // ── Shared branded header layout constants ───────────────────────────────
-  const CARD_TOP  = 3;                          // top white margin before the navy card (mm)
-  const NAVY_H    = 33;                         // navy block height (mm) — matches grid height
+  const CARD_TOP  = 12;                         // top white margin before the navy card (mm)
+  const NAVY_H    = 27.5;                       // navy block height (mm) — matches grid height
   const GRID_TOP  = CARD_TOP + NAVY_H;          // grid sits directly below navy — no gap
-  const GRID_H    = 30;                         // metadata grid height
-  const AFTER_HDR = GRID_TOP + GRID_H + 10;    // first y for content (≈78mm)
+  const GRID_H    = 23.0;                       // metadata grid height
+  const AFTER_HDR = 66.6;                       // first y for content (≈66.6mm/188.8pt)
 
-  // Column widths — last column wide enough that "TOTAL DOCUMENTS" fits on one line
-  // so the label wraps to 2 lines ("TOTAL DOCUMENTS" / "REVIEWED"), not 3
-  const mcW = [38, 58, 51, usableW - 38 - 58 - 51] as const; // 38|58|51|35
+  // Column widths — 4 equal columns on the cover page metadata grid
+  const mcW = [usableW / 4, usableW / 4, usableW / 4, usableW / 4] as const;
 
   // Draws the branded header block on whichever page is currently active.
   // Returns the y position where content should start below the grid.
   const drawBrandedHeader = () => {
-    // Navy block — card within page margins (not full-bleed)
+    // Outer container border — encompasses navy card + grid
+    doc.setDrawColor(210, 215, 225);
+    doc.setLineWidth(0.4);
+    doc.rect(ML, CARD_TOP, usableW, NAVY_H + GRID_H);
+
+    // Navy fill
     doc.setFillColor(...navy);
     doc.rect(ML, CARD_TOP, usableW, NAVY_H, "F");
 
@@ -298,27 +302,23 @@ export async function exportPDF(
     doc.setTextColor(160, 185, 215);
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.text("PROOFX", ML + 5, CARD_TOP + 7);
+    doc.text("P R O O F X", ML + 5.8, CARD_TOP + 8.9);
 
-    // Title — single line, tight below PROOFX
+    // Title — single line
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(22);
+    doc.setFontSize(21);
     doc.setFont("helvetica", "bold");
-    doc.text("Label Proofing Report", ML + 5, CARD_TOP + 17);
+    doc.text("Label Proofing Report", ML + 5.8, CARD_TOP + 16.5);
 
     // Subtitle — immediately below title
-    doc.setFontSize(7.5);
+    doc.setFontSize(7.8);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(160, 185, 215);
-    doc.text("AUDIT-READY  \u00b7  CHANGE CONTROL RECORD", ML + 5, CARD_TOP + 26);
-
-    // 4-column metadata grid — outer border
-    doc.setDrawColor(210, 215, 225);
-    doc.setLineWidth(0.4);
-    doc.rect(ML, GRID_TOP, usableW, GRID_H);
+    doc.text("AUDIT-READY  \u00b7  CHANGE CONTROL RECORD", ML + 5.8, CARD_TOP + 23.5);
 
     // Column dividers
     doc.setLineWidth(0.3);
+    doc.setDrawColor(210, 215, 225);
     let divX = ML;
     for (let c = 0; c < 3; c++) {
       divX += mcW[c];
@@ -337,20 +337,27 @@ export async function exportPDF(
     for (let c = 0; c < 4; c++) {
       const { label, value } = metaCols[c];
       const cellX = cx + 5;
-      const maxW  = mcW[c] - 10;
+      const maxW  = mcW[c] - 8;
 
-      doc.setFontSize(6.5);
+      doc.setFontSize(6.6);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(100, 120, 155);
-      doc.text(label, cellX, GRID_TOP + 9, { maxWidth: maxW });
+      const labelLines: string[] = doc.splitTextToSize(label, maxW);
+      doc.text(labelLines, cellX, GRID_TOP + 7.5);
 
-      doc.setFontSize(10);
+      const valueY = GRID_TOP + (labelLines.length > 1 ? 18.3 : 15.7);
+      doc.setFontSize(8.8);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(...navy);
-      doc.text(value, cellX, GRID_TOP + 23, { maxWidth: maxW });
+      doc.text(value, cellX, valueY, { maxWidth: maxW });
 
       cx += mcW[c];
     }
+
+    // Redraw outer container border on top so it sits over grid content
+    doc.setDrawColor(210, 215, 225);
+    doc.setLineWidth(0.4);
+    doc.rect(ML, CARD_TOP, usableW, NAVY_H + GRID_H);
 
     return AFTER_HDR;
   };
@@ -358,56 +365,248 @@ export async function exportPDF(
   // ── PAGE 1: COVER ────────────────────────────────────────────────────────
   let y = drawBrandedHeader();
 
-  // LRF: Change Summary on cover
+  // LRF: Change Summary on cover — numbered cards with FROM / TO panels
   if (showStatus) {
+    const fileToDataUrl = (file: File): Promise<string> => {
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => resolve("");
+        reader.readAsDataURL(file);
+      });
+    };
+
+    const getImageDimensions = (dataUrl: string): Promise<{ w: number; h: number }> => {
+      return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onerror = () => resolve({ w: 1, h: 1 });
+        img.src = dataUrl;
+      });
+    };
+
+    const mapLrfAttrToLabel = (attrId: string): string => {
+      const normalized = attrId.toLowerCase().trim();
+      if (normalized === "branding_logo" || normalized === "logo_change") return "Branding logo change";
+      if (normalized === "ec_rep_text" || normalized === "ec_rep" || normalized === "sym_authorized_rep" || normalized === "ecrep_name" || normalized === "ecrep_addr") return "EC REP to EU REP change";
+      if (normalized === "patent_url") return "Patent URL change";
+      if (normalized === "manufacturer_address" || normalized === "manufacturer_addr") return "Address change";
+      const lookup = LRF_ATTRIBUTE_LOOKUP[attrId]?.label;
+      if (lookup) return lookup;
+      return attrId.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+    };
+
     const definedChanges = Object.entries(lrfData!.changes).filter(([, cd]) => cd.changeType !== "");
     if (definedChanges.length > 0) {
-      y += 6;
+      y += 8;
+
+      // Section title — thin left accent bar + bold navy text
       doc.setFillColor(...navy);
-      doc.rect(ML, y - 5, usableW, 9, "F");
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(7.5);
+      doc.rect(ML, y, 1.8, 6.5, "F");
+      doc.setTextColor(...navy);
+      doc.setFontSize(9.8);
       doc.setFont("helvetica", "bold");
-      doc.text("CHANGE SUMMARY \u2014 EXPECTED CHANGES", ML + 3, y + 0.5);
-      y += 11;
+      doc.text(
+        `CHANGE SUMMARY \u2014 EXPECTED CHANGES (${definedChanges.length})`,
+        ML + 4,
+        y + 5.3,
+      );
+      y += 13.5;
 
+      const hdrH   = 8;
+      const panelW  = (usableW - 20) / 2;   // width of each FROM / TO panel
+      const fromX   = ML + 3;
+      const toX     = ML + usableW / 2 + 6;
+
+      let changeNum = 1;
       for (const [attrId, cd] of definedChanges) {
-        if (y > H - 18) break;
-        const label   = LRF_ATTRIBUTE_LOOKUP[attrId]?.label ?? attrId;
-        const fromVal = cd.oldValue || "\u2014";
-        const toVal   = cd.newValue || "\u2014";
+        const fromVal = (cd.oldValue ?? "").trim();
+        const toVal   = (cd.newValue ?? "").trim();
 
-        doc.setFontSize(8);
+        const isBranding = attrId === "branding_logo" || attrId === "logo_change";
+        const isEcRep = attrId === "ec_rep_text" || attrId === "ec_rep" || attrId === "sym_authorized_rep" || attrId === "ecrep_name" || attrId === "ecrep_addr";
+        
+        let contentH = 18;
+        if (isBranding) {
+          contentH = 21;
+        } else if (isEcRep) {
+          contentH = 19;
+        } else {
+          doc.setFontSize(7.5);
+          doc.setFont("helvetica", "normal");
+          const fromLines = fromVal ? doc.splitTextToSize(fromVal, panelW - 8) : [];
+          const toLines   = toVal   ? doc.splitTextToSize(toVal,   panelW - 8) : [];
+          const maxLines  = Math.max(fromLines.length, toLines.length, 1);
+          contentH = Math.max(15, maxLines * 4.2 + 8);
+        }
+        
+        const cardPad = 3;
+        const cardH   = hdrH + contentH + cardPad;
+
+        if (y + cardH > H - 18) { doc.addPage(); y = 20; }
+
+        // Draw card outer rounded border
+        doc.setDrawColor(218, 224, 233);
+        doc.setLineWidth(0.3);
+        doc.roundedRect(ML, y, usableW, cardH, 2, 2);
+
+        // Draw card header background (rounded top corners, squared bottom)
+        doc.setFillColor(243, 246, 250);
+        doc.roundedRect(ML, y, usableW, hdrH, 2, 2, "F");
+        doc.rect(ML, y + hdrH - 2, usableW, 2, "F"); // square the bottom
+
+        // Draw header border dividing line
+        doc.setDrawColor(218, 224, 233);
+        doc.setLineWidth(0.25);
+        doc.line(ML, y + hdrH, ML + usableW, y + hdrH);
+
+        // Numbered circle
+        doc.setFillColor(...navy);
+        doc.circle(ML + 5.5, y + hdrH / 2, 2.5, "F");
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(6.5);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(28, 46, 89);
-        doc.text(label, ML, y, { maxWidth: 65 });
+        doc.text(String(changeNum), ML + 5.5, y + hdrH / 2 + 0.9, { align: "center" });
 
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(80, 80, 80);
-        doc.text(fromVal, ML + 70, y);
-
-        const arrowX = ML + 70 + doc.getTextWidth(fromVal) + 4;
+        // Change label next to circle
+        doc.setTextColor(...navy);
+        doc.setFontSize(8.2);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(...orange);
-        doc.text("\u2192", arrowX, y);
+        doc.text(mapLrfAttrToLabel(attrId), ML + 11, y + hdrH / 2 + 1.0);
 
-        doc.setFont("helvetica", "normal");
-        doc.setTextColor(20, 20, 20);
-        doc.text(toVal, arrowX + 6, y, { maxWidth: W - ML - (arrowX + 6) });
-        y += 8;
+        const contentTop = y + hdrH + 2;
+        const panelH     = contentH - 2;
+
+        // FROM panel border
+        doc.setDrawColor(225, 229, 237);
+        doc.setLineWidth(0.25);
+        doc.roundedRect(fromX, contentTop, panelW, panelH, 1, 1);
+
+        // FROM badge – light pink/red background, thin border, dark red text
+        doc.setFillColor(254, 242, 242);
+        doc.setDrawColor(248, 113, 113);
+        doc.setLineWidth(0.2);
+        doc.rect(fromX, contentTop, 12.5, 4.5, "FD");
+        doc.setTextColor(220, 38, 38);
+        doc.setFontSize(5.5);
+        doc.setFont("helvetica", "bold");
+        doc.text("FROM", fromX + 1.8, contentTop + 3.2);
+
+        // TO panel border
+        doc.setDrawColor(225, 229, 237);
+        doc.setLineWidth(0.25);
+        doc.roundedRect(toX, contentTop, panelW, panelH, 1, 1);
+
+        // TO badge – light blue background, thin border, dark blue text
+        doc.setFillColor(239, 246, 255);
+        doc.setDrawColor(147, 197, 253);
+        doc.setLineWidth(0.2);
+        doc.rect(toX, contentTop, 10.5, 4.5, "FD");
+        doc.setTextColor(26, 86, 219);
+        doc.setFontSize(5.5);
+        doc.setFont("helvetica", "bold");
+        doc.text("TO", toX + 2.2, contentTop + 3.2);
+
+        // Draw vector arrow in the middle
+        const arrowX = ML + usableW / 2;
+        const arrowY = contentTop + panelH / 2;
+        doc.setLineWidth(0.35);
+        doc.setDrawColor(120, 130, 150);
+        doc.line(arrowX - 2.5, arrowY, arrowX + 2.5, arrowY);
+        doc.line(arrowX + 1.2, arrowY - 1.5, arrowX + 2.5, arrowY);
+        doc.line(arrowX + 1.2, arrowY + 1.5, arrowX + 2.5, arrowY);
+
+        // Content rendering (images vs text)
+        if (isBranding || isEcRep) {
+          let imgFrom = "";
+          let imgTo   = "";
+
+          if (cd.oldFile) {
+            imgFrom = await fileToDataUrl(cd.oldFile);
+          }
+          if (cd.newFile) {
+            imgTo = await fileToDataUrl(cd.newFile);
+          }
+
+          if (!imgFrom) {
+            imgFrom = "";
+          }
+          if (!imgTo) {
+            imgTo = "";
+          }
+
+          let aspectFrom = isBranding ? (779 / 196) : (640 / 224);
+          let aspectTo   = isBranding ? (387 / 102) : (640 / 224);
+
+          if (cd.oldFile && imgFrom) {
+            const dims = await getImageDimensions(imgFrom);
+            aspectFrom = dims.w / dims.h;
+          }
+          if (cd.newFile && imgTo) {
+            const dims = await getImageDimensions(imgTo);
+            aspectTo = dims.w / dims.h;
+          }
+
+          const areaX = fromX + 3;
+          const areaY = contentTop + 6;
+          const areaW = panelW - 6;
+          const areaH = panelH - 8;
+
+          // Center From Image
+          let drawW = areaW;
+          let drawH = drawW / aspectFrom;
+          if (drawH > areaH) {
+            drawH = areaH;
+            drawW = drawH * aspectFrom;
+          }
+          let dx = areaX + (areaW - drawW) / 2;
+          let dy = areaY + (areaH - drawH) / 2;
+          doc.addImage(imgFrom, "PNG", dx, dy, drawW, drawH);
+
+          // Center To Image
+          const areaToX = toX + 3;
+          let drawWTo = areaW;
+          let drawHTo = drawWTo / aspectTo;
+          if (drawHTo > areaH) {
+            drawHTo = areaH;
+            drawWTo = drawHTo * aspectTo;
+          }
+          let dxTo = areaToX + (areaW - drawWTo) / 2;
+          let dyTo = areaY + (areaH - drawHTo) / 2;
+          doc.addImage(imgTo, "PNG", dxTo, dyTo, drawWTo, drawHTo);
+        } else {
+          doc.setFontSize(7.5);
+          doc.setFont("helvetica", "normal");
+          doc.setTextColor(60, 60, 60);
+
+          const fromLines = fromVal ? doc.splitTextToSize(fromVal, panelW - 8) : [];
+          const toLines   = toVal   ? doc.splitTextToSize(toVal,   panelW - 8) : [];
+
+          const textYFrom = contentTop + 7 + (panelH - 7 - fromLines.length * 4.2) / 2;
+          const textYTo   = contentTop + 7 + (panelH - 7 - toLines.length * 4.2) / 2;
+
+          if (fromLines.length > 0) {
+            doc.text(fromLines, fromX + 4, textYFrom, { align: "left" });
+          }
+          if (toLines.length > 0) {
+            doc.text(toLines, toX + 4, textYTo, { align: "left" });
+          }
+        }
+
+        y += cardH + 4;
+        changeNum++;
       }
     }
   }
 
-  // ── PAGE 2: Summary placeholder (rendered after pair pages) ─────────────
-  doc.addPage();
+  // ── PAGE 2: Summary placeholder ─────────────────────────────────────────
   const SUMMARY_PAGE = 2;
+  doc.addPage();
 
   // ── PER-PAIR PAGES (3+) ──────────────────────────────────────────────────
   const isPdf = (name: string) => name.toLowerCase().endsWith(".pdf");
   type ImgData = { dataUrl: string; width: number; height: number };
   const pairPageNumbers: number[] = [];
-  const MAX_IMG_H = 88; // mm per image (full-width stacked)
 
   for (let pIdx = 0; pIdx < exportPairs.length; pIdx++) {
     doc.addPage();
@@ -415,71 +614,79 @@ export async function exportPDF(
     pairPageNumbers.push(pairPage);
 
     const pair       = exportPairs[pIdx];
-    const proofingId = proofingIds[pIdx];
+    const proofingId = `${reportId}_${pairPage}`;
     const status     = pairStatuses[pIdx];
 
-    // Header bar
+    // Navy Header Bar
     doc.setFillColor(...navy);
-    doc.rect(0, 0, W, 18, "F");
+    doc.rect(ML, 13.0, usableW, 12.5, "F");
 
-    const vizPrefix = "LABEL VISUAL COMPARISON";
-    doc.setTextColor(190, 205, 225);
-    doc.setFontSize(7.5);
+    // Left text
+    doc.setTextColor(160, 185, 215);
+    doc.setFontSize(7);
     doc.setFont("helvetica", "normal");
-    doc.text(vizPrefix, ML, 9);
-    doc.setTextColor(...orange);
-    doc.setFont("helvetica", "bold");
-    doc.text(`  \u00b7  ${proofingId}`, ML + doc.getTextWidth(vizPrefix), 9);
-
-    // Back link (right side, second line of header)
-    const backText = "\u2190 Back to Summary Table";
-    doc.setFontSize(7.5);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(190, 205, 225);
-    doc.text(backText, W - ML, 15, { align: "right" });
-    const backW = doc.getTextWidth(backText);
-    doc.link(W - ML - backW, 11, backW, 5, { pageNumber: SUMMARY_PAGE });
+    doc.text("LABEL VISUAL COMPARISON  \u00b7  PROOFING ID", ML + 4, 13.0 + 5.5);
 
     // Large proofing ID
-    let cy = 26;
     doc.setFont("helvetica", "bold");
-    doc.setFontSize(16);
-    doc.setTextColor(...navy);
-    doc.text(proofingId, ML, cy);
+    doc.setFontSize(18);
+    doc.setTextColor(255, 255, 255);
+    doc.text(proofingId, ML + 4, 13.0 + 11.0);
 
-    // Pass/Fail badge (LRF only)
-    if (status) {
-      const badgeColor = status === "PASS" ? green : red;
-      const idW        = doc.getTextWidth(proofingId);
-      doc.setFillColor(...badgeColor);
-      doc.roundedRect(ML + idW + 5, cy - 5.5, 18, 7, 1.5, 1.5, "F");
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(6.5);
-      doc.text(status, ML + idW + 14, cy - 0.5, { align: "center" });
+    // Status Badge (LRF only)
+    if (showStatus && status) {
+      const badgeX = 103.1;
+      const badgeY = 16.7;
+      const badgeW = 18.4;
+      const badgeH = 5.3;
+      const badgeBg = (status === "Pass" ? [158, 217, 159] : [242, 191, 163]) as [number, number, number];
+      const badgeTx = (status === "Pass" ? [27, 94, 32] : [183, 28, 28]) as [number, number, number];
+      
+      doc.setFillColor(...badgeBg);
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1.5, 1.5, "F");
+      
+      doc.setTextColor(...badgeTx);
+      doc.setFontSize(8.5);
+      doc.setFont("helvetica", "bold");
+      doc.text(status, badgeX + badgeW / 2, badgeY + badgeH / 2 + 1.25, { align: "center" });
     }
 
-    // Label names row
-    cy += 7;
-    doc.setFontSize(8);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(120, 120, 120);
-    doc.text("Current:", ML, cy);
+    // Back to Summary Table Button
+    const backW = 44;
+    const backX = 194 - backW; // 150: perfectly symmetric 4mm inset from right margin
+    const backY = 17.2;
+    const backH = 5.5;
+    
+    doc.setFillColor(238, 241, 246);
+    doc.roundedRect(backX, backY, backW, backH, 1.5, 1.5, "F");
+    
+    doc.setTextColor(...navy);
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(30, 30, 30);
-    doc.text(pair.masterName, ML + 20, cy, { maxWidth: usableW / 2 - 22 });
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(120, 120, 120);
-    doc.text("Revised:", ML + usableW / 2, cy);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(30, 30, 30);
-    doc.text(pair.revisedName, ML + usableW / 2 + 20, cy, { maxWidth: usableW / 2 - 22 });
+    doc.text("\u2190 Back to Summary Table", backX + backW / 2, backY + backH / 2 + 1.15, { align: "center" });
+    
+    doc.link(backX, backY, backW, backH, { pageNumber: SUMMARY_PAGE });
 
-    // Separator
-    cy += 5;
-    doc.setDrawColor(220, 220, 220);
-    doc.setLineWidth(0.3);
-    doc.line(ML, cy, W - ML, cy);
-    cy += 5;
+    // CURRENT / REVISED names row (just below the navy header)
+    const cyBaseline = 31.4;
+    const labelW = usableW / 2;
+
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(95, 99, 104);
+    doc.text("CURRENT", ML, cyBaseline);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(30, 30, 30);
+    doc.text(pair.masterName, ML + 15, cyBaseline, { maxWidth: labelW - 17 });
+
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(95, 99, 104);
+    doc.text("REVISED", ML + labelW, cyBaseline);
+    
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(30, 30, 30);
+    doc.text(pair.revisedName, ML + labelW + 15, cyBaseline, { maxWidth: labelW - 17 });
 
     // Resolve images
     let masterImg: ImgData | null = null;
@@ -504,135 +711,179 @@ export async function exportPDF(
       revisedImg = { dataUrl, width: revisedCardRef.current.offsetWidth, height: revisedCardRef.current.offsetHeight };
     }
 
-    // CURRENT VERSION LABEL — full width
-    doc.setFillColor(254, 242, 242);
-    doc.rect(ML, cy, usableW, 7, "F");
-    doc.setFillColor(224, 36, 36);
-    doc.circle(ML + 3.5, cy + 3.5, 1.2, "F");
-    doc.setTextColor(224, 36, 36);
-    doc.setFontSize(6.5);
-    doc.setFont("helvetica", "bold");
-    doc.text("CURRENT VERSION LABEL", ML + 7, cy + 4.8);
-    cy += 7;
+    const sectionHdrH = 6.4;
+    const SECT_R = 2;
+    const H_box = 103.2;
 
+    // ─── PANE 1: CURRENT VERSION ──────────────────────────────────────────
+    const masterSectionY = 34.6;
+    
+    doc.setFillColor(253, 235, 235);
+    doc.roundedRect(ML, masterSectionY, usableW, sectionHdrH, SECT_R, SECT_R, "F");
+    doc.setFillColor(253, 235, 235);
+    doc.rect(ML, masterSectionY + sectionHdrH - SECT_R, usableW, SECT_R, "F");
+    
+    doc.setDrawColor(210, 215, 225);
+    doc.setLineWidth(0.25);
+    doc.line(ML, masterSectionY + sectionHdrH, ML + usableW, masterSectionY + sectionHdrH);
+    
+    doc.setFillColor(...red);
+    doc.circle(ML + 4.5, masterSectionY + sectionHdrH / 2, 1, "F");
+    
+    doc.setTextColor(...red);
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "bold");
+    doc.text(`CURRENT VERSION LABEL  \u00b7  ${pair.masterName}`, ML + 8.5, masterSectionY + sectionHdrH / 2 + 1.25, { maxWidth: usableW - 12 });
+
+    const masterImgYStart = masterSectionY + sectionHdrH;
     if (masterImg) {
-      const imgH = Math.min(MAX_IMG_H, usableW * (masterImg.height / masterImg.width));
-      doc.addImage(masterImg.dataUrl, "JPEG", ML, cy, usableW, imgH);
-      doc.setDrawColor(210, 210, 210);
-      doc.setLineWidth(0.25);
-      doc.rect(ML, cy, usableW, imgH);
-      cy += imgH;
+      const imgAspect = masterImg.width / masterImg.height;
+      const boxAspect = usableW / H_box;
+      let imgW = usableW;
+      let imgH = H_box;
+      if (imgAspect > boxAspect) {
+        imgW = usableW;
+        imgH = usableW / imgAspect;
+      } else {
+        imgH = H_box;
+        imgW = H_box * imgAspect;
+      }
+      const imgX = ML + (usableW - imgW) / 2;
+      const imgY = masterImgYStart + (H_box - imgH) / 2;
+      doc.addImage(masterImg.dataUrl, "JPEG", imgX, imgY, imgW, imgH);
     } else {
       doc.setFillColor(248, 248, 248);
-      doc.rect(ML, cy, usableW, 18, "F");
+      doc.rect(ML, masterImgYStart, usableW, H_box, "F");
       doc.setTextColor(160, 160, 160);
       doc.setFontSize(8);
       doc.setFont("helvetica", "italic");
-      doc.text("Label image not available", ML + usableW / 2, cy + 10, { align: "center" });
-      cy += 18;
+      doc.text("Label image not available", ML + usableW / 2, masterImgYStart + H_box / 2, { align: "center" });
     }
-
-    cy += 4; // gap between images
-
-    // NEW VERSION LABEL — full width
-    doc.setFillColor(239, 246, 255);
-    doc.rect(ML, cy, usableW, 7, "F");
-    doc.setFillColor(26, 86, 219);
-    doc.circle(ML + 3.5, cy + 3.5, 1.2, "F");
-    doc.setTextColor(26, 86, 219);
-    doc.setFontSize(6.5);
-    doc.setFont("helvetica", "bold");
-    doc.text("NEW VERSION LABEL", ML + 7, cy + 4.8);
-    cy += 7;
-
-    if (revisedImg) {
-      const imgH = Math.min(MAX_IMG_H, usableW * (revisedImg.height / revisedImg.width));
-      doc.addImage(revisedImg.dataUrl, "JPEG", ML, cy, usableW, imgH);
-      doc.setDrawColor(210, 210, 210);
-      doc.setLineWidth(0.25);
-      doc.rect(ML, cy, usableW, imgH);
-      cy += imgH;
-    } else {
-      doc.setFillColor(248, 248, 248);
-      doc.rect(ML, cy, usableW, 18, "F");
-      doc.setTextColor(160, 160, 160);
-      doc.setFontSize(8);
-      doc.setFont("helvetica", "italic");
-      doc.text("Label image not available", ML + usableW / 2, cy + 10, { align: "center" });
-      cy += 18;
-    }
-
-    // Findings table
-    if (pair.findings.length === 0) continue;
-
-    let findingsY = cy + 8;
-    if (findingsY > H - 50) { doc.addPage(); findingsY = 20; }
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(8);
-    doc.setTextColor(60, 60, 60);
-    doc.text("FINDINGS", ML, findingsY);
-    doc.setDrawColor(...navy);
+    
+    doc.setDrawColor(210, 215, 225);
     doc.setLineWidth(0.3);
-    doc.line(ML, findingsY + 2, W - ML, findingsY + 2);
-    findingsY += 6;
+    doc.roundedRect(ML, masterSectionY, usableW, sectionHdrH + H_box, SECT_R, SECT_R);
 
-    autoTable(doc, {
-      startY: findingsY,
-      margin: { left: ML, right: ML },
-      head: [showStatus
-        ? ["ID", "Category", "Description", "Master Had", "Revised Has", "Status"]
-        : ["ID", "Category", "Description", "Master Had", "Revised Has"]
-      ],
-      body: pair.findings.map((f) => {
-        const row = [
-          f.id,
-          CATEGORIES.find((c) => c.id === f.category)?.label ?? f.category,
-          f.description,
-          f.before,
-          f.after,
-        ];
-        if (showStatus) {
-          const cls = classifyFinding(f, lrfData!);
-          row.push(cls === "expected" ? "EXPECTED" : cls === "unexpected" ? "UNEXPECTED" : "\u2014");
+
+    // ─── PANE 2: REVISED VERSION ──────────────────────────────────────────
+    const revisedSectionY = 147.4;
+    
+    doc.setFillColor(234, 241, 251);
+    doc.roundedRect(ML, revisedSectionY, usableW, sectionHdrH, SECT_R, SECT_R, "F");
+    doc.setFillColor(234, 241, 251);
+    doc.rect(ML, revisedSectionY + sectionHdrH - SECT_R, usableW, SECT_R, "F");
+    
+    doc.setDrawColor(210, 215, 225);
+    doc.setLineWidth(0.25);
+    doc.line(ML, revisedSectionY + sectionHdrH, ML + usableW, revisedSectionY + sectionHdrH);
+    
+    doc.setFillColor(...navy);
+    doc.circle(ML + 4.5, revisedSectionY + sectionHdrH / 2, 1, "F");
+    
+    doc.setTextColor(...navy);
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "bold");
+    doc.text(`NEW VERSION LABEL  \u00b7  ${pair.revisedName}`, ML + 8.5, revisedSectionY + sectionHdrH / 2 + 1.25, { maxWidth: usableW - 12 });
+
+    const revisedImgYStart = revisedSectionY + sectionHdrH;
+    if (revisedImg) {
+      const imgAspect = revisedImg.width / revisedImg.height;
+      const boxAspect = usableW / H_box;
+      let imgW = usableW;
+      let imgH = H_box;
+      if (imgAspect > boxAspect) {
+        imgW = usableW;
+        imgH = usableW / imgAspect;
+      } else {
+        imgH = H_box;
+        imgW = H_box * imgAspect;
+      }
+      const imgX = ML + (usableW - imgW) / 2;
+      const imgY = revisedImgYStart + (H_box - imgH) / 2;
+      doc.addImage(revisedImg.dataUrl, "JPEG", imgX, imgY, imgW, imgH);
+    } else {
+      doc.setFillColor(248, 248, 248);
+      doc.rect(ML, revisedImgYStart, usableW, H_box, "F");
+      doc.setTextColor(160, 160, 160);
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "italic");
+      doc.text("Label image not available", ML + usableW / 2, revisedImgYStart + H_box / 2, { align: "center" });
+    }
+    
+    doc.setDrawColor(210, 215, 225);
+    doc.setLineWidth(0.3);
+    doc.roundedRect(ML, revisedSectionY, usableW, sectionHdrH + H_box, SECT_R, SECT_R);
+
+    // If Direct Comparison (not LRF) and has findings: draw findings table on a new page
+    if (!isLrfWorkflow && pair.findings.length > 0) {
+      doc.addPage();
+      const findingsStartY = 20;
+
+      // Draw left accent bar + bold navy text "FINDINGS"
+      doc.setFillColor(...navy);
+      doc.rect(ML, findingsStartY, 1.8, 6.5, "F");
+      doc.setTextColor(...navy);
+      doc.setFontSize(9.8);
+      doc.setFont("helvetica", "bold");
+      doc.text("FINDINGS", ML + 4, findingsStartY + 5.3);
+
+      const tableHead = [["ID", "Category", "Description", "Master Had", "Revised Has"]];
+      const tableBody = pair.findings.map((finding, fIdx) => [
+        `F${String(pIdx + 1).padStart(3, "0")}-${String(fIdx + 1).padStart(2, "0")}`,
+        CATEGORIES.find((c) => c.id === finding.category)?.label ?? finding.category,
+        finding.description,
+        finding.before,
+        finding.after,
+      ]);
+
+      autoTable(doc, {
+        startY: findingsStartY + 12,
+        margin: { left: ML, right: ML },
+        head: tableHead,
+        body: tableBody,
+        headStyles: { fillColor: navy, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8, cellPadding: { top: 3.5, bottom: 3.5, left: 3, right: 3 } },
+        bodyStyles: { fontSize: 8, textColor: [30, 30, 30], cellPadding: { top: 3.5, bottom: 3.5, left: 3, right: 3 } },
+        alternateRowStyles: { fillColor: lightGray },
+        columnStyles: {
+          0: { cellWidth: 18, cellPadding: { left: 1.5, right: 1.5, top: 3.5, bottom: 3.5 } },
+          1: { cellWidth: 18, cellPadding: { left: 1.5, right: 1.5, top: 3.5, bottom: 3.5 } },
+          2: { cellWidth: 60 },
+          3: { cellWidth: 45 },
+          4: { cellWidth: 45 }
+        },
+        didParseCell(data) {
+          if (data.section === "body" && data.column.index === 0) {
+            const f = pair.findings[data.row.index];
+            if (f) {
+              const cat = f.category;
+              const color = CATEGORIES.find((c) => c.id === cat)?.color ?? "#000";
+              data.cell.styles.textColor = [
+                parseInt(color.slice(1, 3), 16),
+                parseInt(color.slice(3, 5), 16),
+                parseInt(color.slice(5, 7), 16)
+              ];
+              data.cell.styles.fontStyle = "bold";
+            }
+          }
         }
-        return row;
-      }),
-      headStyles: { fillColor: navy, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5 },
-      bodyStyles: { fontSize: 7.5, textColor: [30, 30, 30] },
-      alternateRowStyles: { fillColor: lightGray },
-      columnStyles: showStatus
-        ? { 0: { cellWidth: 12 }, 1: { cellWidth: 20 }, 2: { cellWidth: 54 }, 3: { cellWidth: 38 }, 4: { cellWidth: 34 }, 5: { cellWidth: 24, halign: "center" } }
-        : { 0: { cellWidth: 12 }, 1: { cellWidth: 22 }, 2: { cellWidth: 54 }, 3: { cellWidth: 47 }, 4: { cellWidth: 47 } },
-      didParseCell(data) {
-        if (data.section === "body" && data.column.index === 0) {
-          const cat   = pair.findings[data.row.index]?.category;
-          const color = CATEGORIES.find((c) => c.id === cat)?.color ?? "#000";
-          data.cell.styles.textColor = [parseInt(color.slice(1, 3), 16), parseInt(color.slice(3, 5), 16), parseInt(color.slice(5, 7), 16)];
-          data.cell.styles.fontStyle = "bold";
-        }
-        if (showStatus && data.section === "body" && data.column.index === 5) {
-          const val = typeof data.cell.raw === "string" ? data.cell.raw : "";
-          if (val === "EXPECTED")   { data.cell.styles.fillColor = [29, 158, 117]; data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
-          if (val === "UNEXPECTED") { data.cell.styles.fillColor = [217, 119, 6];  data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
-        }
-      },
-    });
+      });
+    }
+
+    // End of per-pair page loop
   }
 
-  // ── PAGE 2: SUMMARY TABLE (rendered last so pair page numbers are known) ──
+  // ── SUMMARY TABLE (rendered last so pair page numbers are known) ──
   doc.setPage(SUMMARY_PAGE);
   const summaryContentY = drawBrandedHeader(); // same branded header as cover
 
   // "SUMMARY TABLE" section label
   doc.setFillColor(...navy);
-  doc.rect(ML, summaryContentY, usableW, 9, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(8);
+  doc.rect(ML, summaryContentY + 8, 1.8, 6.5, "F");
+  doc.setTextColor(...navy);
+  doc.setFontSize(9.8);
   doc.setFont("helvetica", "bold");
-  doc.text("SUMMARY TABLE", ML + 4, summaryContentY + 6);
+  doc.text("SUMMARY TABLE", ML + 4, summaryContentY + 8 + 5.3);
 
-  // LRF Expected/Unexpected text descriptions (mirrors reference PDF style)
   const fmtExpected   = (i: number) => pairExpected[i]   > 0 ? "Updated"       : "Not updated";
   const fmtUnexpected = (i: number) => pairUnexpected[i] > 0 ? "Available"     : "Not available";
 
@@ -642,35 +893,45 @@ export async function exportPDF(
 
   const summaryBody = exportPairs.map((pair, i) =>
     showStatus
-      ? [proofingIds[i], pair.masterName, pair.revisedName, fmtExpected(i), fmtUnexpected(i), pairStatuses[i] ?? "\u2014"]
-      : [proofingIds[i], pair.masterName, pair.revisedName, String(pair.findings.length)],
+      ? [`${reportId}_${pairPageNumbers[i]}`, pair.masterName, pair.revisedName, fmtExpected(i), fmtUnexpected(i), pairStatuses[i] ?? "\u2014"]
+      : [`${reportId}_${pairPageNumbers[i]}`, pair.masterName, pair.revisedName, String(pair.findings.length)],
   );
 
   autoTable(doc, {
-    startY: summaryContentY + 9,
+    startY: summaryContentY + 20,
     margin: { left: ML, right: ML },
     head: summaryHead,
     body: summaryBody,
-    headStyles: { fillColor: navy, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 7.5, minCellHeight: 12 },
+    headStyles: { fillColor: navy, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8, minCellHeight: 12 },
     bodyStyles: { fontSize: 8, textColor: [30, 30, 30] },
     alternateRowStyles: { fillColor: lightGray },
     columnStyles: showStatus
-      ? { 0: { cellWidth: 26 }, 1: { cellWidth: 38 }, 2: { cellWidth: 38 }, 3: { cellWidth: 30, halign: "center" }, 4: { cellWidth: 30, halign: "center" }, 5: { cellWidth: 20, halign: "center" } }
-      : { 0: { cellWidth: 34 }, 1: { cellWidth: 65 }, 2: { cellWidth: 65 }, 3: { cellWidth: 18, halign: "center" } },
+      ? {
+          0: { cellWidth: 26 },
+          1: { cellWidth: 39 },
+          2: { cellWidth: 39 },
+          3: { cellWidth: 31, halign: "center" },
+          4: { cellWidth: 31, halign: "center" },
+          5: { cellWidth: 20, halign: "center" }
+        }
+      : {
+          0: { cellWidth: 34 },
+          1: { cellWidth: 67 },
+          2: { cellWidth: 67 },
+          3: { cellWidth: 18, halign: "center" }
+        },
     didParseCell(data) {
-      // Proofing ID — styled as a blue link
       if (data.section === "body" && data.column.index === 0) {
         data.cell.styles.textColor = [26, 86, 219];
         data.cell.styles.fontStyle = "bold";
       }
       if (showStatus && data.section === "body" && data.column.index === 5) {
         const val = typeof data.cell.raw === "string" ? data.cell.raw : "";
-        if (val === "PASS") { data.cell.styles.fillColor = [29, 158, 117]; data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
-        if (val === "FAIL") { data.cell.styles.fillColor = [220, 38, 38];  data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
+        if (val === "Pass") { data.cell.styles.fillColor = [29, 158, 117]; data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
+        if (val === "Fail") { data.cell.styles.fillColor = [220, 38, 38];  data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
       }
     },
     didDrawCell(data) {
-      // Internal PDF link: Proofing ID → its pair page
       if (data.section === "body" && data.column.index === 0) {
         const targetPage = pairPageNumbers[data.row.index];
         if (targetPage) doc.link(data.cell.x, data.cell.y, data.cell.width, data.cell.height, { pageNumber: targetPage });
@@ -683,7 +944,7 @@ export async function exportPDF(
   doc.setFont("helvetica", "italic");
   doc.setTextColor(130, 130, 130);
   doc.text(
-    "Each Proofing ID is a clickable link \u2014 click to navigate to the respective label comparison page.",
+    "Each Proofing Id is a clickable link \u2014 selecting one opens that label pair's comparison page.",
     ML,
     summaryEndY + 7,
     { maxWidth: usableW },
@@ -693,15 +954,18 @@ export async function exportPDF(
   const totalPages = doc.getNumberOfPages();
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
-    doc.setFillColor(...navy);
-    doc.rect(0, H - 10, W, 10, "F");
-    doc.setTextColor(190, 205, 225);
-    doc.setFontSize(7);
+    doc.setTextColor(130, 130, 130);
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
-    doc.text(`ProofX  \u00b7  Confidential  \u00b7  ${analystName || "\u2014"}`, ML, H - 4);
-    doc.text(`Page ${i} of ${totalPages}`, W - ML, H - 4, { align: "right" });
+    doc.text("ProofX  \u00b7  Confidential", ML, H - 6);
+    doc.text(`Page ${i} of ${totalPages}`, W - ML, H - 6, { align: "right" });
   }
 
+  try {
+    (window as any).__LAST_PDF_BASE64__ = doc.output("datauristring");
+  } catch (e) {
+    console.error("Failed to extract datauristring", e);
+  }
   doc.save(buildExportFilename(reportId, isLrfWorkflow));
 }
 

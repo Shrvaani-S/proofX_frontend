@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { exportPDF } from "@/report/ExportModal";
 import { HistoryPage } from "@/pages/HistoryPage";
 import { AlertTriangle, ArrowRight } from "lucide-react";
 import { HomePage } from "@/pages/HomePage";
@@ -9,6 +10,7 @@ import { useLogoutOnClose } from "@/hooks/use-logout-on-close";
 import { LRFPage } from "@/pages/LRFPage";
 import { UploadPage, type UploadedFileNames } from "@/pages/UploadPage";
 import AnalysisProgressModal from "@/components/AnalysisProgressModal";
+import PreprocessingModal, { type PreprocessPairName } from "@/components/PreprocessingModal";
 import { ResultsPage } from "@/pages/ResultsPage";
 import {
   alignCompare,
@@ -39,6 +41,7 @@ const EXCLUSION_LABELS: Record<string, string> = {
 };
 
 export default function App() {
+
   const [authed, setAuthed] = useState<boolean>(isAuthenticated);
   // Each bulk poll cycle gets a unique generation number. Any setTimeout callback
   // whose generation doesn't match the current one is silently dropped — this
@@ -72,6 +75,12 @@ export default function App() {
   const [bulkProgress, setBulkProgress] = useState<{ completed: number; total: number } | null>(null);
   const [bulkPairNames, setBulkPairNames] = useState<{ master: string; revised: string }[]>([]);
   const [uploadComplete, setUploadComplete] = useState(false);
+  // Phase-A preprocessing view
+  const [isPreprocessPhase, setIsPreprocessPhase] = useState(false);
+  const [preprocessPairNames, setPreprocessPairNames] = useState<PreprocessPairName[]>([]);
+  const [preprocessExcluded, setPreprocessExcluded] = useState<BulkExcludedPage[]>([]);
+  // true once user clicks Continue in the preprocessing modal — reveals the popup
+  const [showConfirmPopup, setShowConfirmPopup] = useState(false);
   // Set after phase-A pre-processing finishes: drives the confirmation popup.
   const [bulkConfirm, setBulkConfirm] = useState<{
     jobId: string;
@@ -242,9 +251,9 @@ export default function App() {
         return;
       }
 
-      // Expand pair names to page-level so the progress modal's pair list
-      // matches the backend's page-level work items.
-      const expandedNames: { master: string; revised: string; masterPages?: number; revisedPages?: number }[] = [];
+      // Build page-level pair names (with file/page indices for preprocessing modal).
+      const expandedNames: PreprocessPairName[] = [];
+      const bulkNames: { master: string; revised: string; masterPages?: number; revisedPages?: number }[] = [];
       for (let fi = 0; fi < files.masterFiles.length; fi++) {
         const mp = files.masterPageCounts?.[fi] ?? 1;
         const rp = files.revisedPageCounts?.[fi] ?? 1;
@@ -254,13 +263,17 @@ export default function App() {
           expandedNames.push({
             master: `${files.masterNames[fi]}${pageLabel}`,
             revised: `${files.revisedNames[fi]}${pageLabel}`,
-            masterPages: mp,
-            revisedPages: rp,
+            fileIndex: fi,
+            pageIndex: p,
           });
+          bulkNames.push({ master: `${files.masterNames[fi]}${pageLabel}`, revised: `${files.revisedNames[fi]}${pageLabel}`, masterPages: mp, revisedPages: rp });
         }
       }
-      setBulkPairNames(expandedNames);
+      setBulkPairNames(bulkNames);
       setBulkProgress({ completed: 0, total: expandedNames.length });
+      setIsPreprocessPhase(true);
+      setPreprocessPairNames(expandedNames);
+      setPreprocessExcluded([]);
 
       const { job_id } = await startBulkCompare(files.masterFiles, files.revisedFiles, {
         onUploadDone: () => setUploadComplete(true),
@@ -270,18 +283,24 @@ export default function App() {
       const preStatus = await pollBulk(
         job_id,
         (s) => s.status === "needs_confirmation",
-        (s) => setBulkProgress({ completed: s.phase_a.done, total: s.phase_a.total || expandedNames.length }),
+        (s) => {
+          setBulkProgress({ completed: s.phase_a.done, total: s.phase_a.total || expandedNames.length });
+          setPreprocessExcluded([...s.excluded]);
+        },
       );
 
-      // Hand off to the confirmation popup (shown over the upload screen).
+      // Phase A done — keep PreprocessingModal visible so user reviews findings,
+      // then Continue reveals the confirmation popup over it.
       setBulkConfirm({
         jobId: job_id,
         excluded: preStatus.excluded,
         willCompareCount: preStatus.will_compare_count,
         count,
       });
-      setStage("upload");
     } catch (err) {
+      setIsPreprocessPhase(false);
+      setPreprocessPairNames([]);
+      setPreprocessExcluded([]);
       setRunError(err instanceof Error ? err.message : String(err));
       setBulkProgress(null);
       setPendingResults(null);
@@ -294,7 +313,19 @@ export default function App() {
   const proceedBulk = async () => {
     if (!bulkConfirm) return;
     const { jobId, willCompareCount } = bulkConfirm;
+
+    // Trim the analysis grid to only the pairs that will actually be compared
+    const excludedKeys = new Set(bulkConfirm.excluded.map(e => `${e.file_index}-${e.page_index ?? 0}`));
+    setBulkPairNames(preprocessPairNames
+      .filter(p => !excludedKeys.has(`${p.fileIndex}-${p.pageIndex}`))
+      .map(p => ({ master: p.master, revised: p.revised }))
+    );
+
     setBulkConfirm(null);
+    setShowConfirmPopup(false);
+    setIsPreprocessPhase(false);
+    setPreprocessPairNames([]);
+    setPreprocessExcluded([]);
     setMode("bulk");
     setStage("processing");
     setRunError(null);
@@ -357,17 +388,20 @@ export default function App() {
 
   // Bulk — user clicked Re-upload: discard the job (and its stored files) and
   // return to the upload screen for a fresh batch.
-  const reuploadBulk = async () => {
+  const reuploadBulk = () => {
     if (!bulkConfirm) return;
     const { jobId } = bulkConfirm;
+    // Clear all state in one synchronous batch so no modal flashes between renders
     setBulkConfirm(null);
-    try {
-      await cancelBulk(jobId);
-    } catch {
-      // Best-effort — the job also TTL-expires server-side.
-    }
+    setShowConfirmPopup(false);
+    setIsPreprocessPhase(false);
+    setPreprocessPairNames([]);
+    setPreprocessExcluded([]);
+    setBulkPairNames([]);
     setBulkProgress(null);
     setStage("upload");
+    // Fire-and-forget — job also TTL-expires server-side
+    cancelBulk(jobId).catch(() => {});
   };
 
   const handleLogout = async () => {
@@ -437,8 +471,21 @@ export default function App() {
         onBack={() => lrfData !== null ? setStage("lrf") : setStage("home")}
         onRun={runComparison}
       />
+      {/* Phase A: pre-processing — stays visible after completion until user clicks Continue */}
+      <PreprocessingModal
+        isOpen={stage === "processing" && isPreprocessPhase}
+        total={bulkProgress?.total ?? 0}
+        done={bulkProgress?.completed ?? 0}
+        uploadComplete={uploadComplete}
+        pairNames={preprocessPairNames}
+        excluded={preprocessExcluded}
+        isComplete={bulkConfirm !== null}
+        onContinue={() => { setIsPreprocessPhase(false); setShowConfirmPopup(true); }}
+      />
+
+      {/* Phase B: full analysis */}
       <AnalysisProgressModal
-        isOpen={stage === "processing"}
+        isOpen={stage === "processing" && !isPreprocessPhase && !showConfirmPopup}
         sessionLabel={sessionLabel}
         bulkProgress={bulkProgress}
         bulkPairNames={bulkPairNames}
@@ -447,7 +494,7 @@ export default function App() {
         onComplete={handleAnalysisComplete}
       />
 
-      {bulkConfirm && (
+      {bulkConfirm && showConfirmPopup && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[110] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl p-7 w-[520px] flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start gap-4">

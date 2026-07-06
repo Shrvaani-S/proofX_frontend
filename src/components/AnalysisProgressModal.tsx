@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, Circle, Clock, Loader2, ScanLine } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, ScanLine } from "lucide-react";
 
 const STEPS = [
   "Rendering files",
@@ -154,6 +154,11 @@ const AnalysisProgressModal = ({
   if (!isOpen) return null;
 
   const activePair = bulkPairNames?.[completed] ?? null;
+  const activeBoxRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    activeBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [completed]);
 
   return (
     <div className="fixed inset-0 bg-black/30 backdrop-blur-[2px] z-[100] flex items-center justify-center">
@@ -166,7 +171,7 @@ const AnalysisProgressModal = ({
             <span className="text-xs font-bold tracking-tight uppercase text-primary">ProofX</span>
           </div>
           <div className="text-lg font-semibold text-foreground">
-            {isBulk ? `Processing ${total} pair${total !== 1 ? "s" : ""}` : "Analysing labels"}
+            {isBulk ? `Analysing ${total} pair${total !== 1 ? "s" : ""}` : "Analysing labels"}
           </div>
           <div className="text-xs text-muted-foreground mt-0.5 truncate">{sessionLabel}</div>
         </div>
@@ -248,7 +253,7 @@ const AnalysisProgressModal = ({
           </div>
         )}
 
-        {/* ── Bulk: compact page grid ── */}
+        {/* ── Bulk: compact numbered grid ── */}
         {isBulk && bulkPairNames && bulkPairNames.length > 0 && (
           <div className="flex flex-wrap gap-1.5 max-h-[120px] overflow-y-auto pr-0.5">
             {bulkPairNames.map((pair, i) => {
@@ -257,6 +262,7 @@ const AnalysisProgressModal = ({
               return (
                 <div
                   key={i}
+                  ref={isActive ? activeBoxRef : null}
                   title={`#${i + 1}: ${pair.master} vs ${pair.revised}`}
                   className={`w-8 h-8 rounded flex items-center justify-center text-[10px] font-bold shrink-0 transition-colors ${
                     isDone   ? "bg-green-500 text-white"
@@ -264,11 +270,7 @@ const AnalysisProgressModal = ({
                     : "bg-surface-2 text-muted-foreground/50 border border-border"
                   }`}
                 >
-                  {isDone
-                    ? <CheckCircle2 className="h-3.5 w-3.5" />
-                    : isActive
-                    ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    : i + 1}
+                  {isDone ? <CheckCircle2 className="h-3.5 w-3.5" /> : i + 1}
                 </div>
               );
             })}

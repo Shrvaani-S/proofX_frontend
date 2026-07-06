@@ -113,10 +113,16 @@ function HistoryRow({ run, cellPad, textSize }: { run: HistoryRun; cellPad: stri
       const { pair } = buildLabelPairFromReport(
         run.run_id, report.base_name, report.revised_name, report,
       );
-      const timestamp = new Date().toLocaleString("en-GB", {
+      // Use the server's recorded run timestamp, not the client clock at download time.
+      const timestamp = new Date(run.created_at).toLocaleString("en-GB", {
         day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
       });
-      await exportPDF([pair], pair, "ProofX History", "", timestamp);
+      // Use persisted LRF metadata when available (requires backend to store them
+      // via the reconcile payload's `metadata` field). Falls back to empty strings
+      // (shown as "—" in the report) until the backend is updated.
+      const analystName = report.requested_by ?? "";
+      const reference   = report.cr_number   ?? "";
+      await exportPDF([pair], pair, analystName, reference, timestamp);
     } catch {
       // Older runs (or ones saved before the full-report feature) only have
       // the flat proof PNG — fall back rather than leaving the click dead.
