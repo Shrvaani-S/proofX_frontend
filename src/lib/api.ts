@@ -104,51 +104,89 @@ export interface ReconcileReport {
 }
 
 // ── Bulk compare types ────────────────────────────────────────────────────
+//
+// The bulk pipeline is two-phase: POST /bulk-compare pre-processes (aligns)
+// every page in the background and parks the job in `needs_confirmation` with
+// a list of the pages it will NOT compare; the user then confirms (compare the
+// survivors) or cancels (discard + re-upload). Comparison output images are no
+// longer returned inline — they are pulled per page from GET /bulk-image.
 
-export interface BulkPageMismatch {
-  index: number;
+/** A page the backend flagged during pre-processing and will not compare. */
+export interface BulkExcludedPage {
+  file_index: number;
+  page_index: number | null; // null for a whole-file page-count mismatch
   base_name: string;
   revised_name: string;
-  base_pages: number;
-  revised_pages: number;
+  classification: "dimension_error" | "variable_shift" | "page_count_mismatch" | "error";
+  reason?: string | null;
 }
 
+/** Lightweight per-page summary carried in the poll response (no images, no
+ *  full report — those are fetched on demand). */
+export interface BulkPageResultSummary {
+  file_index: number;
+  page_index: number | null;
+  base_name: string;
+  revised_name: string;
+  status: "done" | "error";
+  findings_total?: number;
+  comparison_inputs?: "cropped_overlap" | "full_page";
+  alignment_status?: string | null;
+  low_confidence?: boolean;
+  error?: string;
+}
+
+export type BulkJobPhase =
+  | "preprocessing"
+  | "needs_confirmation"
+  | "comparing"
+  | "done"
+  | "error";
+
+export interface BulkJobStatus {
+  job_id: string;
+  status: BulkJobPhase;
+  phase_a: { total: number; done: number };
+  compare: { total: number; completed: number; failed: number };
+  excluded: BulkExcludedPage[];
+  excluded_count: number;
+  will_compare_count: number;
+  results: BulkPageResultSummary[];
+  error?: string | null;
+}
+
+export interface BulkCompareStartResponse {
+  job_id: string;
+  status: "preprocessing";
+}
+
+/** Full detail for one compared page (GET /bulk-result). */
+export interface BulkPageReport {
+  job_id?: string;
+  file_index?: number;
+  page_index?: number;
+  combined_report: CombinedReport;
+  notes: string[];
+  comparison_inputs: "cropped_overlap" | "full_page";
+}
+
+/** Client-assembled per-page result: the poll summary joined with its
+ *  on-demand report + fetched images, shaped like the old inline result so the
+ *  shared render loop stays unchanged. */
 export interface BulkPairResult {
   file_index: number;
   page_index: number | null;
-  run_id: string;
+  run_id: string; // empty for bulk pages (no per-page run_store id)
   status: "done" | "error";
   base_name: string;
   revised_name: string;
-  // Present when status === "done"
   combined_report?: CombinedReport;
   notes?: string[];
   comparison_inputs?: "cropped_overlap" | "full_page";
   proof_png_base64?: string;
   base_image_png_base64?: string;
   revised_image_png_base64?: string;
-  // Present when status === "error"
   error?: string;
-  // Present when status === "skipped_page_mismatch"
-  base_pages?: number;
-  revised_pages?: number;
-  reason?: string;
-}
-
-export interface BulkJobStatus {
-  job_id: string;
-  status: "running" | "done";
-  total: number;
-  completed: number;
-  failed: number;
-  skipped: number;
-  results: BulkPairResult[];
-}
-
-export interface BulkCompareStartResponse {
-  job_id: string;
-  total: number;
-  skipped: number;
 }
 
 // ─── Auth ────────────────────────────────────────────────────────────────────
@@ -311,23 +349,20 @@ export async function alignCompare(
   }
 }
 
-export type BulkCompareResponse =
-  | { job_id: string; total: number; skipped?: number }
-  | { status: "needs_confirmation"; mismatches: BulkPageMismatch[] };
-
+/** POST /api/bulk-compare — saves the uploads and kicks off phase-A
+ *  pre-processing in the background. Returns immediately; poll getBulkStatus. */
 export async function startBulkCompare(
   bases: File[],
   reviseds: File[],
-  opts: { page?: number; nativeResolution?: boolean; onUploadDone?: () => void; confirmSkip?: boolean } = {},
-): Promise<BulkCompareResponse> {
+  opts: { nativeResolution?: boolean; onUploadDone?: () => void } = {},
+): Promise<BulkCompareStartResponse> {
   const form = new FormData();
   for (const f of bases) form.append("bases", f);
   for (const f of reviseds) form.append("reviseds", f);
   form.append("native_resolution", String(opts.nativeResolution ?? false));
-  form.append("confirm_skip", String(opts.confirmSkip ?? false));
 
   try {
-    return await xhrPost<BulkCompareResponse>(`${API_BASE_URL}/api/bulk-compare`, form, {
+    return await xhrPost<BulkCompareStartResponse>(`${API_BASE_URL}/api/bulk-compare`, form, {
       onUploadDone: opts.onUploadDone,
       headers: authHeaders(),
     });
@@ -346,6 +381,89 @@ export async function getBulkStatus(jobId: string): Promise<BulkJobStatus> {
     throw new Error(`bulk-status failed: ${detail}`);
   }
   return res.json();
+}
+
+/** POST /api/bulk-confirm/{job_id} — proceed past the popup: compare the
+ *  surviving (non-excluded) pages. Poll getBulkStatus until status === "done". */
+export async function confirmBulk(
+  jobId: string,
+): Promise<{ job_id: string; status: string; total: number }> {
+  const res = await fetch(`${API_BASE_URL}/api/bulk-confirm/${jobId}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(await parseErrorDetail(res));
+  }
+  return res.json();
+}
+
+/** POST /api/bulk-cancel/{job_id} — discard the job and all its stored files
+ *  (the re-upload path). */
+export async function cancelBulk(
+  jobId: string,
+): Promise<{ job_id: string; status: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/bulk-cancel/${jobId}`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(await parseErrorDetail(res));
+  }
+  return res.json();
+}
+
+/** GET /api/bulk-result/{job_id}/{file_index}/{page_index} — full detail
+ *  (combined report + notes) for one compared page. */
+export async function getBulkResult(
+  jobId: string,
+  fileIndex: number,
+  pageIndex: number,
+): Promise<BulkPageReport> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/bulk-result/${jobId}/${fileIndex}/${pageIndex}`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(await parseErrorDetail(res));
+  }
+  return res.json();
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("failed to read image blob"));
+    reader.onloadend = () => {
+      // reader.result is a "data:image/png;base64,XXXX" URL — strip the prefix
+      // so the value matches the raw base64 the render layer expects.
+      const dataUrl = String(reader.result ?? "");
+      resolve(dataUrl.split(",")[1] ?? "");
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
+/** GET /api/bulk-image/... — fetch one output image (auth-protected, so it
+ *  can't go straight in an <img src>) and return it as raw base64. */
+export async function fetchBulkImageBase64(
+  jobId: string,
+  fileIndex: number,
+  pageIndex: number,
+  kind: "proof" | "base" | "revised",
+): Promise<string> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/bulk-image/${jobId}/${fileIndex}/${pageIndex}/${kind}`,
+    { headers: authHeaders() },
+  );
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`bulk-image failed: ${res.statusText}`);
+  }
+  return blobToBase64(await res.blob());
 }
 
 export async function reconcile(
