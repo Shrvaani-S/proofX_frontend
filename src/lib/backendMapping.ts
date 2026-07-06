@@ -72,6 +72,11 @@ export function buildLabelPair(
     findings,
     width,
     height,
+    // Always fully loaded — this builder is only ever called with a complete
+    // AlignCompareResponse already in hand (single-mode compare, or a bulk
+    // pair's on-demand detail fetch). Only bulk skeletons (App.tsx's
+    // proceedBulk) start as `loaded: false`.
+    loaded: true,
   };
 
   return { pair, idMap };
@@ -118,6 +123,7 @@ export function buildLabelPairFromReport(
     findings,
     width,
     height,
+    loaded: true,
   };
 
   return { pair, idMap };

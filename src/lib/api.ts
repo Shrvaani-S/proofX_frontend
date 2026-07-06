@@ -371,8 +371,22 @@ export async function startBulkCompare(
   }
 }
 
-export async function getBulkStatus(jobId: string): Promise<BulkJobStatus> {
-  const res = await fetch(`${API_BASE_URL}/api/bulk-status/${jobId}`, {
+/** GET /api/bulk-status/{job_id} — poll one bulk job's progress.
+ *
+ *  `resultsSince`/`excludedSince` ask the backend for only the entries
+ *  appended since the caller's last poll (both lists are append-only), rather
+ *  than resending the whole accumulated list every tick. Pass the previous
+ *  response's `compare.completed + compare.failed` / `excluded_count` as the
+ *  next call's cursor. Omit both to get everything from the start. */
+export async function getBulkStatus(
+  jobId: string,
+  opts: { resultsSince?: number; excludedSince?: number } = {},
+): Promise<BulkJobStatus> {
+  const params = new URLSearchParams();
+  if (opts.resultsSince) params.set("results_since", String(opts.resultsSince));
+  if (opts.excludedSince) params.set("excluded_since", String(opts.excludedSince));
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE_URL}/api/bulk-status/${jobId}${qs ? `?${qs}` : ""}`, {
     headers: authHeaders(),
   });
   if (!res.ok) {
