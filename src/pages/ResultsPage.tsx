@@ -78,6 +78,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
 
   const activePairIndex = Math.max(0, pairs.findIndex((p) => p.id === activePairId));
   const pair = pairs[activePairIndex];
+  const activePairLoaded = pair.loaded;
   const canvasW = pair.width ?? LABEL_W;
   const canvasH = pair.height ?? LABEL_H;
   const reconciliation = reconciliationByPair?.[pair.id];
@@ -134,7 +135,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
       m.removeEventListener("scroll", onM);
       r.removeEventListener("scroll", onR);
     };
-  }, [syncScroll, activePairId]);
+  }, [syncScroll, activePairId, activePairLoaded]);
 
   // Scroll to finding on click
   const handleFindingClick = (f: Finding) => {

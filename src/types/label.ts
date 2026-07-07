@@ -34,4 +34,8 @@ export interface LabelPair {
   /** True when the backend flagged this pair for a variable shift in alignment.
    *  The pair is still shown in results but findings may be unreliable. */
   alignmentFlagged?: boolean;
+  /** False for a bulk-mode pair whose full findings/images haven't been
+   *  fetched yet — fetched lazily when the user views it. Single-mode pairs
+   *  omit this field (treated as always loaded). */
+  loaded?: boolean;
 }
