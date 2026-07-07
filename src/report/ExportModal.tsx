@@ -367,10 +367,27 @@ export async function exportPDF(
 
   // LRF: Change Summary on cover — numbered cards with FROM / TO panels
   if (showStatus) {
+    // Reference uploads may be PNG, JPEG, or SVG (see LRFAttributeRow's fileAccept);
+    // jsPDF's addImage is always called with "PNG", so every format is rasterized
+    // through a canvas here rather than trusting the upload to already be a PNG.
     const fileToDataUrl = (file: File): Promise<string> => {
       return new Promise((resolve) => {
         const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            // SVGs with no width/height/viewBox report 0 naturalWidth/Height
+            const w = img.naturalWidth || 512;
+            const h = img.naturalHeight || 512;
+            const canvas = document.createElement("canvas");
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext("2d")!.drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL("image/png"));
+          };
+          img.onerror = () => resolve("");
+          img.src = reader.result as string;
+        };
         reader.onerror = () => resolve("");
         reader.readAsDataURL(file);
       });
@@ -379,7 +396,7 @@ export async function exportPDF(
     const getImageDimensions = (dataUrl: string): Promise<{ w: number; h: number }> => {
       return new Promise((resolve) => {
         const img = new Image();
-        img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+        img.onload = () => resolve({ w: img.naturalWidth || 512, h: img.naturalHeight || 512 });
         img.onerror = () => resolve({ w: 1, h: 1 });
         img.src = dataUrl;
       });

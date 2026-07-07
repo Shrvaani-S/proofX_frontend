@@ -21,6 +21,7 @@ import {
   getBulkResult,
   fetchBulkImageBase64,
   reconcile,
+  bulkReconcile,
   isAuthenticated,
   logout,
 } from "@/lib/api";
@@ -29,9 +30,9 @@ import { buildLabelPair } from "@/lib/backendMapping";
 import { buildReconcileLRF, applyReconciliation, type ReconciliationOverrides } from "@/lib/lrfReconcile";
 import type { LabelPair } from "@/types/label";
 import type { LRFData } from "@/types/lrf";
-
+ 
 type Stage = "home" | "history" | "lrf" | "upload" | "processing" | "results";
-
+ 
 // Human labels for the pages excluded during bulk pre-processing.
 const EXCLUSION_LABELS: Record<string, string> = {
   dimension_error: "Dimension error",
@@ -39,15 +40,15 @@ const EXCLUSION_LABELS: Record<string, string> = {
   page_count_mismatch: "Page-count mismatch",
   error: "Unreadable",
 };
-
+ 
 export default function App() {
-
+ 
   const [authed, setAuthed] = useState<boolean>(isAuthenticated);
   // Each bulk poll cycle gets a unique generation number. Any setTimeout callback
   // whose generation doesn't match the current one is silently dropped — this
   // prevents stale polls from a cancelled/retried run from mutating state.
   const pollGenerationRef = useRef(0);
-
+ 
   // Redirect to login when any API call receives a 401 (token expired/revoked).
   useEffect(() => {
     const handler = () => {
@@ -57,12 +58,12 @@ export default function App() {
     window.addEventListener("proofx:unauthorized", handler);
     return () => window.removeEventListener("proofx:unauthorized", handler);
   }, []);
-
+ 
   // Cancel any in-flight poll if the component ever unmounts (edge case).
   useEffect(() => {
     return () => { pollGenerationRef.current += 1; };
   }, []);
-
+ 
   const tabStatus = useSingleTab(authed);
   // Log out (release the server single-session lock) when the holder tab closes.
   useLogoutOnClose(authed && tabStatus === "active");
@@ -97,7 +98,7 @@ export default function App() {
   // (see proceedBulk); this tracks which ones currently have an in-flight
   // fetch so ResultsPage can show a spinner and so a pair is never fetched twice.
   const [loadingPairIds, setLoadingPairIds] = useState<Set<string>>(new Set());
-
+ 
   const handleAnalysisComplete = () => {
     if (!pendingResults) return;
     setPairs(pendingResults.pairs);
@@ -107,12 +108,12 @@ export default function App() {
     setPendingResults(null);
     setStage("results");
   };
-
+ 
   const sessionLabel =
     mode === "single"
       ? pairs[0] ? `${pairs[0].masterName} vs ${pairs[0].revisedName}` : ""
       : `${pairs.length} label pairs`;
-
+ 
   // Poll a bulk job until `until` holds (or it errors), reporting progress on
   // every tick. A generation guard drops stale callbacks from a superseded run;
   // a few consecutive network failures are tolerated before giving up.
@@ -167,7 +168,7 @@ export default function App() {
       setTimeout(poll, POLL_MS);
     });
   };
-
+ 
   // Turn assembled per-page results into label pairs (+ reconciliation) and
   // stage them for the results view. Shared by single and bulk.
   const finishResults = async (results: BulkPairResult[]) => {
@@ -175,11 +176,11 @@ export default function App() {
     const nextReconciliation: Record<string, ReconciliationOverrides> = {};
     const errors: string[] = [];
     const skipped: string[] = [];
-
+ 
     const { lrf: reconcileLrf, refImages } = lrfData
       ? buildReconcileLRF(lrfData, lrfData.metadata.crNumber || "LRF")
       : { lrf: null, refImages: [] };
-
+ 
     // Count how many results share each file_index — files with more than one
     // entry are multi-page PDFs and need a page label in the sidebar.
     const pageCountByFile = new Map<number, number>();
@@ -188,7 +189,7 @@ export default function App() {
         pageCountByFile.set(r.file_index, (pageCountByFile.get(r.file_index) ?? 0) + 1);
       }
     }
-
+ 
     for (const [idx, result] of results.entries()) {
       if (result.status === "error" || !result.combined_report) {
         errors.push(`${result.base_name}: ${result.error ?? "unknown error"}`);
@@ -218,7 +219,7 @@ export default function App() {
       );
       if (isFlagged) pair.alignmentFlagged = true;
       nextPairs.push(pair);
-
+ 
       // Reconciliation reloads a prior run by its run_store run_id. Bulk pages
       // don't carry one yet (backend follow-up), so only reconcile single-mode
       // results, which do.
@@ -227,18 +228,18 @@ export default function App() {
         nextReconciliation[pairId] = applyReconciliation(report, idMap);
       }
     }
-
+ 
     if (nextPairs.length === 0 && (errors.length > 0 || skipped.length > 0)) {
       throw new Error([...skipped, ...errors].join("; "));
     }
-
+ 
     setPendingResults({
       pairs: nextPairs,
       reconciliation: nextReconciliation,
       partialError: errors.length > 0 ? `${errors.length} pair(s) failed: ${errors.join("; ")}` : undefined,
     });
   };
-
+ 
   // Single-compare, or bulk PHASE A: upload + pre-process every page, then park
   // at the confirmation popup (bulk) via setBulkConfirm.
   const runComparison = async (m: "single" | "bulk", count: number, files: UploadedFileNames) => {
@@ -248,7 +249,7 @@ export default function App() {
     setBulkProgress(null);
     setUploadComplete(false);
     setPendingResults(null);
-
+ 
     try {
       if (m === "single") {
         const response = await alignCompare(files.masterFiles[0], files.revisedFiles[0], {
@@ -270,7 +271,7 @@ export default function App() {
         }]);
         return;
       }
-
+ 
       // Build page-level pair names (with file/page indices for preprocessing modal).
       const expandedNames: PreprocessPairName[] = [];
       const bulkNames: { master: string; revised: string; masterPages?: number; revisedPages?: number }[] = [];
@@ -294,11 +295,11 @@ export default function App() {
       setIsPreprocessPhase(true);
       setPreprocessPairNames(expandedNames);
       setPreprocessExcluded([]);
-
+ 
       const { job_id } = await startBulkCompare(files.masterFiles, files.revisedFiles, {
         onUploadDone: () => setUploadComplete(true),
       });
-
+ 
       // Phase A — pre-process every page, then the job parks awaiting confirmation.
       const preStatus = await pollBulk(
         job_id,
@@ -308,7 +309,7 @@ export default function App() {
           setPreprocessExcluded([...s.excluded]);
         },
       );
-
+ 
       // Phase A done — keep PreprocessingModal visible so user reviews findings,
       // then Continue reveals the confirmation popup over it.
       setBulkConfirm({
@@ -327,7 +328,7 @@ export default function App() {
       setStage("upload");
     }
   };
-
+ 
   // Bulk PHASE B — user clicked Proceed: compare the survivors. Pairs are
   // staged as unloaded skeletons (name + finding count, both already present
   // in the lightweight summary) — the full report + images are fetched lazily,
@@ -336,14 +337,14 @@ export default function App() {
   const proceedBulk = async () => {
     if (!bulkConfirm) return;
     const { jobId, willCompareCount } = bulkConfirm;
-
+ 
     // Trim the analysis grid to only the pairs that will actually be compared
     const excludedKeys = new Set(bulkConfirm.excluded.map(e => `${e.file_index}-${e.page_index ?? 0}`));
     setBulkPairNames(preprocessPairNames
       .filter(p => !excludedKeys.has(`${p.fileIndex}-${p.pageIndex}`))
       .map(p => ({ master: p.master, revised: p.revised }))
     );
-
+ 
     setBulkConfirm(null);
     setShowConfirmPopup(false);
     setIsPreprocessPhase(false);
@@ -355,7 +356,7 @@ export default function App() {
     setPendingResults(null);
     setUploadComplete(true); // upload already finished during phase A
     setBulkProgress({ completed: 0, total: willCompareCount });
-
+ 
     try {
       await confirmBulk(jobId);
       const finalStatus = await pollBulk(
@@ -363,7 +364,7 @@ export default function App() {
         (s) => s.status === "done",
         (s) => setBulkProgress({ completed: s.compare.completed + s.compare.failed, total: s.compare.total }),
       );
-
+ 
       // Count how many results share each file_index — files with more than
       // one entry are multi-page PDFs and need a page label in the sidebar
       // (same convention as finishResults, single mode's builder).
@@ -373,7 +374,7 @@ export default function App() {
           pageCountByFile.set(r.file_index, (pageCountByFile.get(r.file_index) ?? 0) + 1);
         }
       }
-
+ 
       const nextPairs: LabelPair[] = [];
       const errors: string[] = [];
       finalStatus.results.forEach((r, idx) => {
@@ -397,11 +398,11 @@ export default function App() {
           bulkRef: { jobId, fileIndex: r.file_index, pageIndex: r.page_index },
         });
       });
-
+ 
       if (nextPairs.length === 0 && errors.length > 0) {
         throw new Error(errors.join("; "));
       }
-
+ 
       setPendingResults({
         pairs: nextPairs,
         reconciliation: {},
@@ -414,7 +415,7 @@ export default function App() {
       setStage("upload");
     }
   };
-
+ 
   // Fetch one bulk pair's full report + images on demand — called by
   // ResultsPage (via onSelectPair) when the user views a pair that's still an
   // unloaded skeleton. Replaces the old fetch-everything-up-front approach.
@@ -428,7 +429,7 @@ export default function App() {
         fetchBulkImageBase64(jobId, fileIndex, pageIndex, "base"),
         fetchBulkImageBase64(jobId, fileIndex, pageIndex, "revised"),
       ]);
-      const { pair: loadedPair } = buildLabelPair(pair.id, pair.masterName, pair.revisedName, {
+      const { pair: loadedPair, idMap } = buildLabelPair(pair.id, pair.masterName, pair.revisedName, {
         run_id: "",
         combined_report: detail.combined_report,
         notes: detail.notes,
@@ -440,6 +441,26 @@ export default function App() {
       loadedPair.loaded = true;
       if (detail.combined_report.alignment_status === "FLAGGED") loadedPair.alignmentFlagged = true;
       setPairs((prev) => prev.map((p) => (p.id === pair.id ? loadedPair : p)));
+ 
+      // Run the real backend reconciliation for this page (the bulk equivalent
+      // of what finishResults does for single-mode pairs). Without this a bulk
+      // pair falls back to the weaker client-side classifyFinding heuristic, so
+      // expected/unexpected flags diverge from single mode. Best-effort: on any
+      // failure the ResultsPage heuristic fallback still applies, no regression.
+      if (lrfData && !loadedPair.alignmentFlagged) {
+        const { lrf: reconcileLrf, refImages } = buildReconcileLRF(
+          lrfData, lrfData.metadata.crNumber || "LRF",
+        );
+        if (reconcileLrf) {
+          try {
+            const report = await bulkReconcile(jobId, fileIndex, pageIndex, reconcileLrf, { refImages });
+            const overrides = applyReconciliation(report, idMap);
+            setReconciliationByPair((prev) => ({ ...prev, [pair.id]: overrides }));
+          } catch (err) {
+            console.warn(`bulk reconciliation failed for pair ${pair.id}`, err);
+          }
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setPairs((prev) => prev.map((p) => (p.id === pair.id ? { ...p, loadError: message } : p)));
@@ -451,7 +472,7 @@ export default function App() {
       });
     }
   };
-
+ 
   // Bulk — user clicked Re-upload: discard the job (and its stored files) and
   // return to the upload screen for a fresh batch.
   const reuploadBulk = () => {
@@ -469,13 +490,13 @@ export default function App() {
     // Fire-and-forget — job also TTL-expires server-side
     cancelBulk(jobId).catch(() => {});
   };
-
+ 
   const handleLogout = async () => {
     await logout();
     setAuthed(false);
     setStage("home");
   };
-
+ 
   // Single active tab per browser: a second tab/window is blocked outright.
   if (tabStatus === "blocked") {
     return <LoggedInElsewhere />;
@@ -483,11 +504,11 @@ export default function App() {
   if (tabStatus === "checking") {
     return null; // brief (<=250ms) probe window; avoids a flash of the wrong screen
   }
-
+ 
   if (!authed) {
     return <LoginPage onSuccess={() => setAuthed(true)} />;
   }
-
+ 
   if (stage === "home") {
     return (
       <HomePage
@@ -498,11 +519,11 @@ export default function App() {
       />
     );
   }
-
+ 
   if (stage === "history") {
     return <HistoryPage onBack={() => setStage("home")} />;
   }
-
+ 
   if (stage === "lrf") {
     return (
       <LRFPage
@@ -513,7 +534,7 @@ export default function App() {
       />
     );
   }
-
+ 
   if (stage === "results") {
     return (
       <ResultsPage
@@ -530,7 +551,7 @@ export default function App() {
       />
     );
   }
-
+ 
   return (
     <>
       <UploadPage
@@ -550,7 +571,7 @@ export default function App() {
         isComplete={bulkConfirm !== null}
         onContinue={() => { setIsPreprocessPhase(false); setShowConfirmPopup(true); }}
       />
-
+ 
       {/* Phase B: full analysis */}
       <AnalysisProgressModal
         isOpen={stage === "processing" && !isPreprocessPhase && !showConfirmPopup}
@@ -561,7 +582,7 @@ export default function App() {
         apiDone={pendingResults !== null}
         onComplete={handleAnalysisComplete}
       />
-
+ 
       {bulkConfirm && showConfirmPopup && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[110] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl p-7 w-[520px] flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
@@ -580,7 +601,7 @@ export default function App() {
                 </div>
               </div>
             </div>
-
+ 
             <p className="text-sm text-foreground leading-relaxed">
               {bulkConfirm.excluded.length > 0 ? (
                 <>
@@ -595,7 +616,7 @@ export default function App() {
                 </>
               )}
             </p>
-
+ 
             {bulkConfirm.excluded.length > 0 && (
               <ul className="text-xs text-muted-foreground space-y-1 border border-border rounded px-4 py-3 bg-surface-2 max-h-52 overflow-y-auto">
                 {bulkConfirm.excluded.map((e, i) => (
@@ -611,7 +632,7 @@ export default function App() {
                 ))}
               </ul>
             )}
-
+ 
             <div className="flex justify-end gap-3 pt-1 border-t border-border">
               <button
                 onClick={reuploadBulk}
@@ -631,7 +652,7 @@ export default function App() {
           </div>
         </div>
       )}
-
+ 
     </>
   );
 }
