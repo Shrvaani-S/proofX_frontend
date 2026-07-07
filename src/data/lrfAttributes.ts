@@ -4,7 +4,7 @@
 export type LRFCategoryId = "text" | "graphics" | "barcode";
 
 export const LRF_CHANGE_TYPES = ["Add", "Remove", "Modify"] as const;
-export const LRF_SYMBOL_CHANGE_TYPES = ["Add", "Remove"] as const;
+export const LRF_SYMBOL_CHANGE_TYPES = ["Add", "Remove", "Modify"] as const;
 export const LRF_IMAGE_CHANGE_TYPES  = ["Add", "Remove", "Modify"] as const;
 export type LRFChangeType = typeof LRF_CHANGE_TYPES[number];
 

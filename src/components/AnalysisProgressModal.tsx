@@ -157,8 +157,22 @@ const AnalysisProgressModal = ({
   const activeBoxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    activeBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [completed]);
+    if (!isOpen) return;
+    // Use requestAnimationFrame to ensure the DOM elements are fully mounted and sized
+    requestAnimationFrame(() => {
+      try {
+        if (activeBoxRef.current && typeof activeBoxRef.current.scrollIntoView === "function") {
+          activeBoxRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      } catch (err) {
+        console.warn("Auto-scroll failed:", err);
+      }
+    });
+  }, [completed, isOpen]);
+
+  if (!isOpen) return null;
+
+  const activePair = bulkPairNames?.[completed] ?? null;
 
   if (!isOpen) return null;
 

@@ -49,15 +49,18 @@ export default function LRFAttributeRow({
   const showNew = !noTextFields && !isBackgroundGroup && (changeType === "Add" || changeType === "Modify");
   const showRegion = !noTextFields && isBackgroundGroup && changeType !== "";
 
-  // Graphic diff needs BOTH the old and new image to actually compare against each
-  // other (backend's logo match_type does a relative shape+colour comparison of the
-  // two references) — a single "new" upload alone can't drive a real before/after
-  // graphic diff, only "this is what it should look like now".
+  // Image groups: show file uploads for Add (new only) and Modify (old + new).
+  // Symbol groups: show PNG uploads for Modify only (old + new).
   const showNewUpload =
-    !isDeleted && !isBackgroundGroup &&
-    isImageGroup && (changeType === "Add" || changeType === "Modify");
+    !isDeleted && !isBackgroundGroup && (
+      (isImageGroup && (changeType === "Add" || changeType === "Modify")) ||
+      (isSymbolGroup && changeType === "Modify")
+    );
   const showOldUpload =
-    !isBackgroundGroup && isImageGroup && changeType === "Modify";
+    !isBackgroundGroup && changeType === "Modify" && (isImageGroup || isSymbolGroup);
+
+  // PNG-only for symbols; broader accept for image groups (logos may be SVG)
+  const fileAccept = isSymbolGroup ? ".png,image/png" : "image/*,.svg";
 
   const hasDefined = changeType !== "";
 
@@ -146,7 +149,7 @@ export default function LRFAttributeRow({
                   <span className="truncate">{oldValue || "Upload current image"}</span>
                   <input
                     type="file"
-                    accept="image/*,.svg"
+                    accept={fileAccept}
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
@@ -165,7 +168,7 @@ export default function LRFAttributeRow({
                   <span className="truncate">{newValue || "Upload new image"}</span>
                   <input
                     type="file"
-                    accept="image/*,.svg"
+                    accept={fileAccept}
                     className="hidden"
                     onChange={(e) => {
                       const file = e.target.files?.[0];
