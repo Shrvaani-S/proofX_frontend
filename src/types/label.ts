@@ -49,4 +49,9 @@ export interface LabelPair {
    *  Bulk mode only — absent for single-mode/history pairs, which already
    *  carry everything up front. */
   bulkRef?: { jobId: string; fileIndex: number; pageIndex: number };
+  /** Backend run_id for a single-mode pair (see router/align_compare.py) —
+   *  lets Export Report re-fetch this pair's data fresh from the backend
+   *  (GET /api/history/{run_id}/report) instead of trusting client state.
+   *  Empty/absent for bulk pairs, which use `bulkRef` for the same purpose. */
+  run_id?: string;
 }

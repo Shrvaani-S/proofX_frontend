@@ -642,6 +642,81 @@ export async function downloadProof(runId: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+/** GET /api/history/{run_id}/export-pdf — server-rendered report PDF
+ *  (report_pdf.py), single mode. Replaces the old client-side jsPDF
+ *  assembly (ExportModal.tsx's exportPDF()) for this flow: the backend
+ *  renders from its own persisted findings/images/reconciliation data, so
+ *  the export is authoritative regardless of frontend/browser state. */
+export async function downloadHistoryReportPdf(runId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/history/${runId}/export-pdf`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`export-pdf failed: ${await parseErrorDetail(res)}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ProofX_Report_${runId}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+export interface BulkExportStatus {
+  job_id: string;
+  export_status: "running" | "done" | "error" | null;
+  export_error: string | null;
+}
+
+/** POST /api/bulk-jobs/{job_id}/export-pdf — kick off server-side PDF report
+ *  generation for a completed bulk job. Job-based (matches the bulk-compare
+ *  two-phase pattern) since rendering a large batch (S3 fetch + reconcile +
+ *  draw per page) can take a while: poll getBulkExportStatus until
+ *  "done"/"error", then downloadBulkExportResult. */
+export async function startBulkExportPdf(
+  jobId: string,
+): Promise<{ job_id: string; export_status: string }> {
+  const res = await fetch(`${API_BASE_URL}/api/bulk-jobs/${jobId}/export-pdf`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(await parseErrorDetail(res));
+  }
+  return res.json();
+}
+
+export async function getBulkExportStatus(jobId: string): Promise<BulkExportStatus> {
+  const res = await fetch(`${API_BASE_URL}/api/bulk-jobs/${jobId}/export-status`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(await parseErrorDetail(res));
+  }
+  return res.json();
+}
+
+export async function downloadBulkExportResult(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/bulk-jobs/${jobId}/export-result`, {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`export-result failed: ${await parseErrorDetail(res)}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `ProofX_Bulk_Report_${jobId}.pdf`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function exportHistoryCSV(): Promise<void> {
   const res = await fetch(`${API_BASE_URL}/api/history/export/csv`, {
     headers: authHeaders(),

@@ -77,6 +77,10 @@ export function buildLabelPair(
     // pair's on-demand detail fetch). Only bulk skeletons (App.tsx's
     // proceedBulk) start as `loaded: false`.
     loaded: true,
+    // Real run_id for single mode; "" for bulk pairs (App.tsx's
+    // loadBulkPairDetail always passes run_id: "", since bulk pairs use
+    // bulkRef.jobId for the equivalent fresh-fetch instead).
+    run_id: response.run_id,
   };
 
   return { pair, idMap };

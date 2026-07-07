@@ -1,8 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowLeft, Home, Loader2, Maximize2, ScanLine, X } from "lucide-react";
 import { LabelImage } from "@/components/LabelImage";
-import { exportPDF } from "@/report/ExportModal";
 // import { ExportModal } from "@/report/ExportModal"; // TODO: Re-enable for full export modal UI
+import {
+  downloadBulkExportResult,
+  downloadHistoryReportPdf,
+  getBulkExportStatus,
+  startBulkExportPdf,
+} from "@/lib/api";
 import StepIndicator, { STEPS_LRF, STEPS_QUICK } from "@/components/StepIndicator";
 import { CATEGORIES, CAT_COLOR, LABEL_H, LABEL_W } from "@/constants";
 import type { Category, Finding, LabelPair } from "@/types/label";
@@ -29,12 +34,16 @@ interface Props {
   /** Pair ids currently being fetched, so the sidebar/main panel can show a
    *  spinner instead of the empty skeleton. */
   loadingPairIds?: Set<string>;
+  /** The current bulk job's id (mode === "bulk" only), held independently of
+   *  any individual pair — see App.tsx's activeBulkJobId for why this can't
+   *  be recovered by scanning `pairs` for a bulkRef. */
+  bulkJobId?: string | null;
   onBack: () => void;
   onHome?: () => void;
 }
 
 
-export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliationByPair, partialError, onSelectPair, loadingPairIds, onBack, onHome }: Props) {
+export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliationByPair, partialError, onSelectPair, loadingPairIds, bulkJobId, onBack, onHome }: Props) {
   const [partialErrorDismissed, setPartialErrorDismissed] = useState(false);
   const [activePairId, setActivePairId] = useState(pairs[0].id);
   const [activeCats, setActiveCats] = useState<Set<Category | "all">>(
@@ -82,6 +91,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
   const [syncScroll, setSyncScroll] = useState(true);
   // const [showExport, setShowExport] = useState(false); // TODO: Re-enable for export modal
   const [isExporting, setIsExporting] = useState(false);
+  const [exportStatusText, setExportStatusText] = useState<string | null>(null);
   const [activeStatus, setActiveStatus] = useState<"all" | "expected" | "unexpected">("all");
 
   const activePairIndex = Math.max(0, pairs.findIndex((p) => p.id === activePairId));
@@ -611,25 +621,43 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
             disabled={isExporting}
             onClick={async () => {
               setIsExporting(true);
+              setExportStatusText(mode === "bulk" ? "Starting export…" : "Generating PDF…");
               try {
-                const exportPairs = mode === "single" ? [pair] : pairs;
-                const analystName = lrfData?.metadata.requestedBy ?? "";
-                const reference = lrfData?.metadata.crNumber ?? "";
-                const timestamp = new Date().toLocaleString("en-GB", {
-                  day: "2-digit", month: "short", year: "numeric",
-                  hour: "2-digit", minute: "2-digit",
-                });
-                await exportPDF(exportPairs, pair, analystName, reference, timestamp, masterCardRef, revisedCardRef, lrfData, isLrfWorkflow);
+                if (mode === "single") {
+                  if (!pair.run_id) {
+                    throw new Error("Missing run_id for this pair — cannot export.");
+                  }
+                  // Server renders the PDF from its own persisted findings/images/
+                  // reconciliation data (report_pdf.py) — no client-side assembly.
+                  await downloadHistoryReportPdf(pair.run_id);
+                } else {
+                  const jobId = bulkJobId ?? pairs.find((p) => p.bulkRef)?.bulkRef?.jobId;
+                  if (!jobId) {
+                    throw new Error("Missing job id — cannot export.");
+                  }
+                  await startBulkExportPdf(jobId);
+                  setExportStatusText("Generating PDF…");
+                  let status = await getBulkExportStatus(jobId);
+                  while (status.export_status === "running") {
+                    await new Promise((resolve) => setTimeout(resolve, 1500));
+                    status = await getBulkExportStatus(jobId);
+                  }
+                  if (status.export_status === "error") {
+                    throw new Error(status.export_error || "PDF generation failed.");
+                  }
+                  await downloadBulkExportResult(jobId);
+                }
               } catch (err) {
                 console.error("Export PDF failed:", err);
                 alert("Failed to export PDF report. Error details: " + (err instanceof Error ? err.message : String(err)));
               } finally {
                 setIsExporting(false);
+                setExportStatusText(null);
               }
             }}
             className="flex items-center gap-2 px-7 py-2.5 text-[13px] font-bold uppercase tracking-widest rounded-lg shadow-sm bg-accent text-white hover:bg-accent-hover transition-all disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            {isExporting ? "Generating PDF…" : "Export Report"}
+            {isExporting ? (exportStatusText ?? "Generating PDF…") : "Export Report"}
           </button>
         </div>
       </footer>

@@ -98,6 +98,15 @@ export default function App() {
   // (see proceedBulk); this tracks which ones currently have an in-flight
   // fetch so ResultsPage can show a spinner and so a pair is never fetched twice.
   const [loadingPairIds, setLoadingPairIds] = useState<Set<string>>(new Set());
+  // The current bulk job's id, held independently of any individual pair.
+  // Every pair gets a bulkRef with this same jobId when results first arrive
+  // (see proceedBulk), but loadBulkPairDetail replaces a viewed pair's
+  // skeleton with buildLabelPair()'s output, which doesn't carry bulkRef
+  // forward — once every pair has been opened at least once, no pair has a
+  // bulkRef left. ResultsPage's Export Report needs the job id regardless of
+  // how many pairs have been viewed, so it's tracked here instead of scanned
+  // off `pairs`.
+  const [activeBulkJobId, setActiveBulkJobId] = useState<string | null>(null);
  
   const handleAnalysisComplete = () => {
     if (!pendingResults) return;
@@ -249,6 +258,7 @@ export default function App() {
     setBulkProgress(null);
     setUploadComplete(false);
     setPendingResults(null);
+    setActiveBulkJobId(null);
  
     try {
       if (m === "single") {
@@ -356,6 +366,7 @@ export default function App() {
     setPendingResults(null);
     setUploadComplete(true); // upload already finished during phase A
     setBulkProgress({ completed: 0, total: willCompareCount });
+    setActiveBulkJobId(jobId);
  
     try {
       await confirmBulk(jobId);
@@ -486,6 +497,7 @@ export default function App() {
     setPreprocessExcluded([]);
     setBulkPairNames([]);
     setBulkProgress(null);
+    setActiveBulkJobId(null);
     setStage("upload");
     // Fire-and-forget — job also TTL-expires server-side
     cancelBulk(jobId).catch(() => {});
@@ -546,6 +558,7 @@ export default function App() {
         partialError={runError ?? undefined}
         onSelectPair={loadBulkPairDetail}
         loadingPairIds={loadingPairIds}
+        bulkJobId={activeBulkJobId}
         onBack={lrfData !== null ? () => setStage("upload") : () => setStage("home")}
         onHome={() => setStage("home")}
       />
