@@ -517,14 +517,19 @@ export async function exportPDF(
         doc.line(arrowX + 1.2, arrowY + 1.5, arrowX + 2.5, arrowY);
 
         // Content rendering (images vs text)
+        // Content rendering (images vs text)
         if (isBranding || isEcRep) {
           let imgFrom = "";
           let imgTo   = "";
 
-          if (cd.oldFile) {
+          const isRealFile = (val: any): val is File => {
+            return val instanceof Blob || val instanceof File;
+          };
+
+          if (isRealFile(cd.oldFile)) {
             imgFrom = await fileToDataUrl(cd.oldFile);
           }
-          if (cd.newFile) {
+          if (isRealFile(cd.newFile)) {
             imgTo = await fileToDataUrl(cd.newFile);
           }
 
@@ -538,11 +543,11 @@ export async function exportPDF(
           let aspectFrom = isBranding ? (779 / 196) : (640 / 224);
           let aspectTo   = isBranding ? (387 / 102) : (640 / 224);
 
-          if (cd.oldFile && imgFrom) {
+          if (isRealFile(cd.oldFile) && imgFrom) {
             const dims = await getImageDimensions(imgFrom);
             aspectFrom = dims.w / dims.h;
           }
-          if (cd.newFile && imgTo) {
+          if (isRealFile(cd.newFile) && imgTo) {
             const dims = await getImageDimensions(imgTo);
             aspectTo = dims.w / dims.h;
           }
@@ -553,27 +558,45 @@ export async function exportPDF(
           const areaH = panelH - 8;
 
           // Center From Image
-          let drawW = areaW;
-          let drawH = drawW / aspectFrom;
-          if (drawH > areaH) {
-            drawH = areaH;
-            drawW = drawH * aspectFrom;
+          if (imgFrom) {
+            let drawW = areaW;
+            let drawH = drawW / aspectFrom;
+            if (drawH > areaH) {
+              drawH = areaH;
+              drawW = drawH * aspectFrom;
+            }
+            let dx = areaX + (areaW - drawW) / 2;
+            let dy = areaY + (areaH - drawH) / 2;
+            doc.addImage(imgFrom, "PNG", dx, dy, drawW, drawH);
+          } else {
+            doc.setFillColor(248, 248, 248);
+            doc.rect(fromX + 2, areaY, panelW - 4, areaH, "F");
+            doc.setTextColor(160, 160, 160);
+            doc.setFontSize(7.5);
+            doc.setFont("helvetica", "italic");
+            doc.text("No image uploaded", fromX + panelW / 2, areaY + areaH / 2, { align: "center" });
           }
-          let dx = areaX + (areaW - drawW) / 2;
-          let dy = areaY + (areaH - drawH) / 2;
-          doc.addImage(imgFrom, "PNG", dx, dy, drawW, drawH);
 
           // Center To Image
-          const areaToX = toX + 3;
-          let drawWTo = areaW;
-          let drawHTo = drawWTo / aspectTo;
-          if (drawHTo > areaH) {
-            drawHTo = areaH;
-            drawWTo = drawHTo * aspectTo;
+          if (imgTo) {
+            const areaToX = toX + 3;
+            let drawWTo = areaW;
+            let drawHTo = drawWTo / aspectTo;
+            if (drawHTo > areaH) {
+              drawHTo = areaH;
+              drawWTo = drawHTo * aspectTo;
+            }
+            let dxTo = areaToX + (areaW - drawWTo) / 2;
+            let dyTo = areaY + (areaH - drawHTo) / 2;
+            doc.addImage(imgTo, "PNG", dxTo, dyTo, drawWTo, drawHTo);
+          } else {
+            doc.setFillColor(248, 248, 248);
+            doc.rect(toX + 2, areaY, panelW - 4, areaH, "F");
+            doc.setTextColor(160, 160, 160);
+            doc.setFontSize(7.5);
+            doc.setFont("helvetica", "italic");
+            doc.text("No image uploaded", toX + panelW / 2, areaY + areaH / 2, { align: "center" });
           }
-          let dxTo = areaToX + (areaW - drawWTo) / 2;
-          let dyTo = areaY + (areaH - drawHTo) / 2;
-          doc.addImage(imgTo, "PNG", dxTo, dyTo, drawWTo, drawHTo);
         } else {
           doc.setFontSize(7.5);
           doc.setFont("helvetica", "normal");

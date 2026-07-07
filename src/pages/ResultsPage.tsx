@@ -566,6 +566,9 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
                   hour: "2-digit", minute: "2-digit",
                 });
                 await exportPDF(exportPairs, pair, analystName, reference, timestamp, masterCardRef, revisedCardRef, lrfData, isLrfWorkflow);
+              } catch (err) {
+                console.error("Export PDF failed:", err);
+                alert("Failed to export PDF report. Error details: " + (err instanceof Error ? err.message : String(err)));
               } finally {
                 setIsExporting(false);
               }
