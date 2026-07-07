@@ -69,7 +69,8 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
   // labels (preserves prior behaviour when the label is smaller than the viewport).
   const minZoom = (el: HTMLDivElement | null) => (el ? Math.min(30, calcFit(el)) : 30);
 
-  // Auto-fit zoom on mount so the full label is visible without scrolling
+  // Auto-fit zoom whenever the active pair changes so the full label is always
+  // visible without scrolling (not just on first mount).
   useLayoutEffect(() => {
     const el = masterRef.current;
     if (!el) return;
@@ -77,7 +78,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
     setMasterZoom(z);
     setRevisedZoom(z);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activePairId]);
   const [syncScroll, setSyncScroll] = useState(true);
   // const [showExport, setShowExport] = useState(false); // TODO: Re-enable for export modal
   const [isExporting, setIsExporting] = useState(false);
@@ -85,6 +86,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
 
   const activePairIndex = Math.max(0, pairs.findIndex((p) => p.id === activePairId));
   const pair = pairs[activePairIndex];
+  const activePairLoaded = pair.loaded;
   const canvasW = pair.width ?? LABEL_W;
   const canvasH = pair.height ?? LABEL_H;
   const reconciliation = reconciliationByPair?.[pair.id];
@@ -141,7 +143,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
       m.removeEventListener("scroll", onM);
       r.removeEventListener("scroll", onR);
     };
-  }, [syncScroll, activePairId]);
+  }, [syncScroll, activePairId, activePairLoaded]);
 
   // Scroll to finding on click
   const handleFindingClick = (f: Finding) => {
