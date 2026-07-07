@@ -174,10 +174,6 @@ const AnalysisProgressModal = ({
 
   const activePair = bulkPairNames?.[completed] ?? null;
 
-  if (!isOpen) return null;
-
-  const activePair = bulkPairNames?.[completed] ?? null;
-
   return (
     <div className="fixed inset-0 bg-black/30 backdrop-blur-[2px] z-[100] flex items-center justify-center">
       <div className="bg-white rounded-xl shadow-xl p-7 w-[480px] flex flex-col gap-5">
