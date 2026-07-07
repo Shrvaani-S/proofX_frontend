@@ -61,7 +61,8 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
   // labels (preserves prior behaviour when the label is smaller than the viewport).
   const minZoom = (el: HTMLDivElement | null) => (el ? Math.min(30, calcFit(el)) : 30);
 
-  // Auto-fit zoom on mount so the full label is visible without scrolling
+  // Auto-fit zoom whenever the active pair changes so the full label is always
+  // visible without scrolling (not just on first mount).
   useLayoutEffect(() => {
     const el = masterRef.current;
     if (!el) return;
@@ -69,7 +70,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
     setMasterZoom(z);
     setRevisedZoom(z);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activePairId]);
   const [syncScroll, setSyncScroll] = useState(true);
   // const [showExport, setShowExport] = useState(false); // TODO: Re-enable for export modal
   const [isExporting, setIsExporting] = useState(false);
