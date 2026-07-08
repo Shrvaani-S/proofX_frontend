@@ -544,31 +544,6 @@ export async function reconcile(
   return res.json();
 }
 
-export async function bulkReconcile(
-  jobId: string,
-  fileIndex: number,
-  pageIndex: number,
-  lrf: ReconcileLRF,
-  opts: { reviewerAcknowledged?: string[]; refImages?: RefImageUpload[] } = {},
-): Promise<ReconcileReport> {
-  const form = new FormData();
-  form.append("lrf", JSON.stringify(lrf));
-  form.append("reviewer_acknowledged", JSON.stringify(opts.reviewerAcknowledged ?? []));
-  for (const ref of opts.refImages ?? []) {
-    form.append("ref_images", ref.file, ref.name);
-  }
-
-  const res = await fetch(
-    `${API_BASE_URL}/api/bulk-reconcile/${jobId}/${fileIndex}/${pageIndex}`,
-    { method: "POST", body: form, headers: authHeaders() },
-  );
-  if (!res.ok) {
-    if (res.status === 401) handleUnauthorized();
-    throw new Error(`bulk reconcile failed: ${await parseErrorDetail(res)}`);
-  }
-  return res.json();
-}
-
 // ── History ───────────────────────────────────────────────────────────────────
 
 export interface HistoryFilePair {
