@@ -49,7 +49,10 @@ export function buildReconcileLRF(lrfData: LRFData, lrfId: string): ReconcileLRF
     if (imageField) {
       // Needs both references to do a real before/after comparison — an "Add" with
       // only a new image has nothing to compare it against.
-      if (change.changeType !== "Modify" || !change.oldFile || !change.newFile) continue;
+      // Guard against {} — JSON.stringify serialises File to {} which survives
+      // JSON.parse as a truthy non-Blob and causes FormData.append to throw.
+      const isBlob = (v: unknown): v is Blob => v instanceof Blob;
+      if (change.changeType !== "Modify" || !isBlob(change.oldFile) || !isBlob(change.newFile)) continue;
       const oldName = `${attrId}_old_${change.oldFile.name}`;
       const newName = `${attrId}_new_${change.newFile.name}`;
       refImages.push({ name: oldName, file: change.oldFile }, { name: newName, file: change.newFile });

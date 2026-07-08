@@ -27,6 +27,7 @@ interface Props {
   excluded: BulkExcludedPage[];
   isComplete?: boolean;
   onContinue?: () => void;
+  onReupload?: () => void;
 }
 
 const PreprocessingModal = ({
@@ -38,6 +39,7 @@ const PreprocessingModal = ({
   excluded,
   isComplete = false,
   onContinue,
+  onReupload,
 }: Props) => {
   const [activeStep, setActiveStep] = useState(-1);
   const activeStepRef = useRef(-1);
@@ -133,11 +135,18 @@ const PreprocessingModal = ({
     .slice(0, done)
     .filter(p => !excludedSet.has(`${p.fileIndex}-${p.pageIndex}`));
 
-  const failReason = (c: string) => {
-    if (c === "variable_shift")      return "Variable shift";
-    if (c === "page_count_mismatch") return "Page mismatch";
-    if (c === "dimension_error")     return "Dimension error";
-    return "Unreadable";
+  const failLabel = (c: string) => {
+    if (c === "variable_shift")      return "Layout mismatch";
+    if (c === "page_count_mismatch") return "Page count differs";
+    if (c === "dimension_error")     return "Size mismatch";
+    return "Processing failed";
+  };
+
+  const failDescription = (c: string) => {
+    if (c === "variable_shift")      return "Pages could not be aligned for comparison";
+    if (c === "page_count_mismatch") return "Master and revised have different page counts";
+    if (c === "dimension_error")     return "Page dimensions differ between master and revised";
+    return "An error occurred while processing this file";
   };
 
   return (
@@ -226,26 +235,33 @@ const PreprocessingModal = ({
             </div>
           </div>
 
-          {/* Fail — all excluded, with reason */}
+          {/* Skipped — all excluded, with reason */}
           <div className="flex-1 border border-red-200 rounded-lg overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-2 bg-red-50 border-b border-red-200">
               <XCircle className="h-3.5 w-3.5 text-red-600 shrink-0" />
-              <span className="text-xs font-semibold text-red-800">Fail ({excluded.length})</span>
+              <span className="text-xs font-semibold text-red-800">Skipped ({excluded.length})</span>
             </div>
             <div className="h-40 overflow-y-auto">
               {excluded.length === 0
                 ? <div className="px-3 py-2 text-[11px] text-muted-foreground italic">None</div>
                 : excluded.map((e, i) => (
-                  <div key={i} className="flex items-center gap-2 px-3 py-1.5 border-b border-red-100/60 last:border-0 min-w-0">
-                    <span className="flex-1 text-[11px] text-foreground truncate min-w-0">
-                      {e.base_name}
-                    </span>
-                    {e.page_index != null && (
-                      <span className="text-[10px] text-muted-foreground shrink-0">p.{e.page_index + 1}</span>
-                    )}
-                    <span className="text-[10px] uppercase tracking-wide text-red-500 shrink-0">
-                      {failReason(e.classification)}
-                    </span>
+                  <div key={i} className="flex items-start gap-2 px-3 py-2 border-b border-red-100/60 last:border-0 min-w-0">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="flex-1 text-[11px] text-foreground truncate min-w-0">
+                          {e.base_name}
+                        </span>
+                        {e.page_index != null && (
+                          <span className="text-[10px] text-muted-foreground shrink-0">Page {e.page_index + 1}</span>
+                        )}
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-red-500 shrink-0">
+                          {failLabel(e.classification)}
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {failDescription(e.classification)}
+                      </p>
+                    </div>
                   </div>
                 ))
               }
@@ -268,12 +284,22 @@ const PreprocessingModal = ({
         </div>
 
         {isComplete && (
-          <button
-            onClick={onContinue}
-            className="w-full py-2.5 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary/90 active:bg-primary/80 transition-colors"
-          >
-            Continue
-          </button>
+          <div className="flex gap-3">
+            {onReupload && (
+              <button
+                onClick={onReupload}
+                className="flex-1 py-2.5 rounded-lg border border-border text-sm font-semibold hover:bg-surface-2 active:bg-surface-2/80 transition-colors"
+              >
+                Re-upload
+              </button>
+            )}
+            <button
+              onClick={onContinue}
+              className={`${onReupload ? "flex-1" : "w-full"} py-2.5 rounded-lg bg-primary text-white text-sm font-semibold hover:bg-primary/90 active:bg-primary/80 transition-colors`}
+            >
+              Continue
+            </button>
+          </div>
         )}
 
         <div className="text-xs text-muted-foreground">Deterministic · No ML · Audit-ready</div>

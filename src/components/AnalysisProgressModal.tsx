@@ -35,6 +35,10 @@ interface Props {
   apiDone?: boolean;
   /** Called when all steps have ticked off AND apiDone is true. */
   onComplete?: () => void;
+  /** When true, bulk mode also waits for the step animation to finish before
+   *  calling onComplete (same gate as single mode). Prevents the screen from
+   *  disappearing instantly when the API returns quickly. */
+  awaitAnimation?: boolean;
 }
 
 const AnalysisProgressModal = ({
@@ -45,6 +49,7 @@ const AnalysisProgressModal = ({
   uploadComplete,
   apiDone,
   onComplete,
+  awaitAnimation = false,
 }: Props) => {
   // -1 = pre-upload / all pending; 0…STEPS.length-1 = animating; STEPS.length = all done
   const [activeStep, setActiveStep] = useState(-1);
@@ -147,9 +152,15 @@ const AnalysisProgressModal = ({
   }, [apiDone, activeStep, isOpen, isBulk, onComplete]);
 
   useEffect(() => {
-    if (!isOpen || !isBulk || !apiDone || completed < total) return;
+    if (!isOpen || !isBulk || !apiDone) return;
+    if (awaitAnimation) {
+      // Single-pair mode: wait for animation to finish, then complete
+      if (activeStep < STEPS.length) return;
+    } else {
+      if (completed < total) return;
+    }
     onComplete?.();
-  }, [apiDone, completed, total, isOpen, isBulk, onComplete]);
+  }, [apiDone, completed, total, activeStep, isOpen, isBulk, awaitAnimation, onComplete]);
 
   // Must run on every render regardless of isOpen — a hook may never sit
   // after an early return (Rules of Hooks), or the hook count differs

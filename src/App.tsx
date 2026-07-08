@@ -25,7 +25,7 @@ import {
   isAuthenticated,
   logout,
 } from "@/lib/api";
-import type { BulkJobStatus, BulkPairResult, BulkExcludedPage } from "@/lib/api";
+import type { BulkJobStatus, BulkPairResult, BulkExcludedPage, AlignCompareResponse } from "@/lib/api";
 import { buildLabelPair } from "@/lib/backendMapping";
 import { buildReconcileLRF, applyReconciliation, type ReconciliationOverrides } from "@/lib/lrfReconcile";
 import type { LabelPair } from "@/types/label";
@@ -35,9 +35,9 @@ type Stage = "home" | "history" | "lrf" | "upload" | "processing" | "results";
  
 // Human labels for the pages excluded during bulk pre-processing.
 const EXCLUSION_LABELS: Record<string, string> = {
-  dimension_error: "Dimension error",
-  variable_shift: "Variable shift",
-  page_count_mismatch: "Page-count mismatch",
+  dimension_error: "Size mismatch",
+  variable_shift: "Layout mismatch",
+  page_count_mismatch: "Page count differs",
   error: "Unreadable",
 };
  
@@ -82,6 +82,16 @@ export default function App() {
   const [preprocessExcluded, setPreprocessExcluded] = useState<BulkExcludedPage[]>([]);
   // true once user clicks Continue in the preprocessing modal — reveals the popup
   const [showConfirmPopup, setShowConfirmPopup] = useState(false);
+  // Single-file Phase A: stores alignCompare result until user clicks Continue
+  const [singleCompareResult, setSingleCompareResult] = useState<{
+    response: AlignCompareResponse;
+    files: UploadedFileNames;
+  } | null>(null);
+  const [singlePreprocessComplete, setSinglePreprocessComplete] = useState(false);
+  const [singleConfirm, setSingleConfirm] = useState<{
+    excluded: BulkExcludedPage[];
+    willCompareCount: number;
+  } | null>(null);
   // Set after phase-A pre-processing finishes: drives the confirmation popup.
   const [bulkConfirm, setBulkConfirm] = useState<{
     jobId: string;
@@ -107,7 +117,7 @@ export default function App() {
   // how many pairs have been viewed, so it's tracked here instead of scanned
   // off `pairs`.
   const [activeBulkJobId, setActiveBulkJobId] = useState<string | null>(null);
- 
+
   const handleAnalysisComplete = () => {
     if (!pendingResults) return;
     setPairs(pendingResults.pairs);
@@ -262,23 +272,34 @@ export default function App() {
  
     try {
       if (m === "single") {
+        // Phase A: pre-process (alignment check) — show PreprocessingModal
+        setIsPreprocessPhase(true);
+        setPreprocessPairNames([{
+          master: files.masterNames[0],
+          revised: files.revisedNames[0],
+          fileIndex: 0,
+          pageIndex: 0,
+        }]);
+        setPreprocessExcluded([]);
+        setBulkProgress({ completed: 0, total: 1 });
+
         const response = await alignCompare(files.masterFiles[0], files.revisedFiles[0], {
           onUploadDone: () => setUploadComplete(true),
         });
-        await finishResults([{
+
+        const isFlagged = response.combined_report.alignment_status === "FLAGGED";
+        const singleExcluded: BulkExcludedPage[] = isFlagged ? [{
           file_index: 0,
-          page_index: 0,
-          run_id: response.run_id,
-          status: "done",
+          page_index: null,
           base_name: files.masterNames[0],
           revised_name: files.revisedNames[0],
-          combined_report: response.combined_report,
-          notes: response.notes,
-          comparison_inputs: response.comparison_inputs,
-          proof_png_base64: response.proof_png_base64,
-          base_image_png_base64: response.base_image_png_base64,
-          revised_image_png_base64: response.revised_image_png_base64,
-        }]);
+          classification: "variable_shift",
+        }] : [];
+        if (isFlagged) setPreprocessExcluded(singleExcluded);
+        setBulkProgress({ completed: 1, total: 1 });
+        setSingleCompareResult({ response, files });
+        setSingleConfirm({ excluded: singleExcluded, willCompareCount: isFlagged ? 0 : 1 });
+        setSinglePreprocessComplete(true);
         return;
       }
  
@@ -332,13 +353,16 @@ export default function App() {
       setIsPreprocessPhase(false);
       setPreprocessPairNames([]);
       setPreprocessExcluded([]);
+      setSinglePreprocessComplete(false);
+      setSingleCompareResult(null);
+      setSingleConfirm(null);
       setRunError(err instanceof Error ? err.message : String(err));
       setBulkProgress(null);
       setPendingResults(null);
       setStage("upload");
     }
   };
- 
+
   // Bulk PHASE B — user clicked Proceed: compare the survivors. Pairs are
   // staged as unloaded skeletons (name + finding count, both already present
   // in the lightweight summary) — the full report + images are fetched lazily,
@@ -375,7 +399,7 @@ export default function App() {
         (s) => s.status === "done",
         (s) => setBulkProgress({ completed: s.compare.completed + s.compare.failed, total: s.compare.total }),
       );
- 
+
       // Count how many results share each file_index — files with more than
       // one entry are multi-page PDFs and need a page label in the sidebar
       // (same convention as finishResults, single mode's builder).
@@ -385,7 +409,8 @@ export default function App() {
           pageCountByFile.set(r.file_index, (pageCountByFile.get(r.file_index) ?? 0) + 1);
         }
       }
- 
+
+      // Build skeleton pairs immediately — no image fetching here.
       const nextPairs: LabelPair[] = [];
       const errors: string[] = [];
       finalStatus.results.forEach((r, idx) => {
@@ -409,11 +434,11 @@ export default function App() {
           bulkRef: { jobId, fileIndex: r.file_index, pageIndex: r.page_index },
         });
       });
- 
+
       if (nextPairs.length === 0 && errors.length > 0) {
         throw new Error(errors.join("; "));
       }
- 
+
       setPendingResults({
         pairs: nextPairs,
         reconciliation: {},
@@ -426,7 +451,7 @@ export default function App() {
       setStage("upload");
     }
   };
- 
+
   // Fetch one bulk pair's full report + images on demand — called by
   // ResultsPage (via onSelectPair) when the user views a pair that's still an
   // unloaded skeleton. Replaces the old fetch-everything-up-front approach.
@@ -452,7 +477,7 @@ export default function App() {
       loadedPair.loaded = true;
       if (detail.combined_report.alignment_status === "FLAGGED") loadedPair.alignmentFlagged = true;
       setPairs((prev) => prev.map((p) => (p.id === pair.id ? loadedPair : p)));
- 
+
       // Run the real backend reconciliation for this page (the bulk equivalent
       // of what finishResults does for single-mode pairs). Without this a bulk
       // pair falls back to the weaker client-side classifyFinding heuristic, so
@@ -483,7 +508,7 @@ export default function App() {
       });
     }
   };
- 
+
   // Bulk — user clicked Re-upload: discard the job (and its stored files) and
   // return to the upload screen for a fresh batch.
   const reuploadBulk = () => {
@@ -502,7 +527,56 @@ export default function App() {
     // Fire-and-forget — job also TTL-expires server-side
     cancelBulk(jobId).catch(() => {});
   };
- 
+
+  const reuploadSingle = () => {
+    setSingleConfirm(null);
+    setSinglePreprocessComplete(false);
+    setSingleCompareResult(null);
+    setIsPreprocessPhase(false);
+    setShowConfirmPopup(false);
+    setPreprocessPairNames([]);
+    setPreprocessExcluded([]);
+    setBulkProgress(null);
+    setStage("upload");
+  };
+
+  const proceedSingle = async () => {
+    if (!singleCompareResult) return;
+    const { response, files: storedFiles } = singleCompareResult;
+    // Clear confirmation popup state
+    setSingleConfirm(null);
+    setShowConfirmPopup(false);
+    setSinglePreprocessComplete(false);
+    setSingleCompareResult(null);
+    setPreprocessPairNames([]);
+    setPreprocessExcluded([]);
+    // Set up analysis phase — reuse bulk-style display for the single pair
+    setBulkPairNames([{ master: storedFiles.masterNames[0], revised: storedFiles.revisedNames[0] }]);
+    setBulkProgress({ completed: 0, total: 1 });
+
+    try {
+      await finishResults([{
+        file_index: 0,
+        page_index: 0,
+        run_id: response.run_id,
+        status: "done",
+        base_name: storedFiles.masterNames[0],
+        revised_name: storedFiles.revisedNames[0],
+        combined_report: response.combined_report,
+        notes: response.notes,
+        comparison_inputs: response.comparison_inputs,
+        proof_png_base64: response.proof_png_base64,
+        base_image_png_base64: response.base_image_png_base64,
+        revised_image_png_base64: response.revised_image_png_base64,
+      }]);
+      // completed stays at 0 — awaitAnimation drives onComplete via animation finish
+    } catch (err) {
+      setRunError(err instanceof Error ? err.message : String(err));
+      setBulkProgress(null);
+      setStage("upload");
+    }
+  };
+
   const handleLogout = async () => {
     await logout();
     setAuthed(false);
@@ -581,8 +655,9 @@ export default function App() {
         uploadComplete={uploadComplete}
         pairNames={preprocessPairNames}
         excluded={preprocessExcluded}
-        isComplete={bulkConfirm !== null}
+        isComplete={bulkConfirm !== null || singlePreprocessComplete}
         onContinue={() => { setIsPreprocessPhase(false); setShowConfirmPopup(true); }}
+        onReupload={singlePreprocessComplete ? reuploadSingle : undefined}
       />
  
       {/* Phase B: full analysis */}
@@ -594,8 +669,73 @@ export default function App() {
         uploadComplete={uploadComplete}
         apiDone={pendingResults !== null}
         onComplete={handleAnalysisComplete}
+        awaitAnimation={mode === "single"}
       />
- 
+
+      {singleConfirm && showConfirmPopup && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[110] flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl p-7 w-[520px] flex flex-col gap-5 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center shrink-0 mt-0.5">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+              </div>
+              <div>
+                <div className="text-sm font-bold text-foreground uppercase tracking-wide mb-0.5">
+                  Pre-processing Complete
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {singleConfirm.excluded.length > 0
+                    ? "Alignment warning detected"
+                    : "Page passed validation"}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-sm text-foreground leading-relaxed">
+              {singleConfirm.excluded.length > 0 ? (
+                <>
+                  This page was flagged during pre-processing for a{" "}
+                  <span className="font-semibold">layout mismatch</span>. Findings may be unreliable.
+                  You can still proceed to view results or re-upload corrected files.
+                </>
+              ) : (
+                <>1 page is ready to compare.</>
+              )}
+            </p>
+
+            {singleConfirm.excluded.length > 0 && (
+              <ul className="text-xs text-muted-foreground space-y-1 border border-border rounded px-4 py-3 bg-surface-2">
+                {singleConfirm.excluded.map((e, i) => (
+                  <li key={i} className="flex items-center gap-2">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0" />
+                    <span className="truncate font-medium text-foreground">{e.base_name}</span>
+                    <span className="ml-auto shrink-0 text-[10px] uppercase tracking-wide">
+                      {EXCLUSION_LABELS[e.classification] ?? e.classification}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <div className="flex justify-end gap-3 pt-1 border-t border-border">
+              <button
+                onClick={reuploadSingle}
+                className="px-5 py-2.5 text-sm font-semibold border border-border rounded-lg hover:bg-surface-2 transition-colors"
+              >
+                Re-upload
+              </button>
+              <button
+                onClick={proceedSingle}
+                className="flex items-center gap-2 px-6 py-2.5 text-sm font-bold uppercase tracking-wider bg-accent text-white rounded-lg hover:bg-accent-hover transition-colors shadow-sm"
+              >
+                Proceed
+                <ArrowRight className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {bulkConfirm && showConfirmPopup && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-[2px] z-[110] flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl p-7 w-[520px] flex flex-col gap-5 max-h-[90vh] overflow-y-auto">

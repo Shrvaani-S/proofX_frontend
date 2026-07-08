@@ -78,16 +78,21 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
   // labels (preserves prior behaviour when the label is smaller than the viewport).
   const minZoom = (el: HTMLDivElement | null) => (el ? Math.min(30, calcFit(el)) : 30);
 
-  // Auto-fit zoom whenever the active pair changes so the full label is always
-  // visible without scrolling (not just on first mount).
+  // Auto-fit zoom whenever the active pair's images become available —
+  // covers initial mount (single mode, always loaded) and the moment a
+  // lazy-loaded bulk pair finishes fetching and its LabelPanel mounts.
+  // Deps use activePairId + pairs so we don't reference `pair` before its
+  // declaration further down.
+  const activePairLoaded = pairs[Math.max(0, pairs.findIndex((p) => p.id === activePairId))]?.loaded;
   useLayoutEffect(() => {
+    if (activePairLoaded === false) return; // skeleton — LabelPanel not mounted yet
     const el = masterRef.current;
     if (!el) return;
     const z = calcFit(el);
     setMasterZoom(z);
     setRevisedZoom(z);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePairId]);
+  }, [activePairId, activePairLoaded]);
   const [syncScroll, setSyncScroll] = useState(true);
   // const [showExport, setShowExport] = useState(false); // TODO: Re-enable for export modal
   const [isExporting, setIsExporting] = useState(false);
@@ -96,7 +101,6 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
 
   const activePairIndex = Math.max(0, pairs.findIndex((p) => p.id === activePairId));
   const pair = pairs[activePairIndex];
-  const activePairLoaded = pair.loaded;
   const canvasW = pair.width ?? LABEL_W;
   const canvasH = pair.height ?? LABEL_H;
   const reconciliation = reconciliationByPair?.[pair.id];
@@ -409,22 +413,7 @@ export function ResultsPage({ pairs, mode, lrfData, isLrfWorkflow, reconciliatio
 
         {/* Findings sidebar */}
         <aside className="w-[400px] border-l border-border bg-surface flex flex-col flex-shrink-0">
-          {reconciliation && (
-            <div
-              className={`px-4 py-2 text-xs font-semibold border-b ${
-                reconciliation.overall === "PASS"
-                  ? "bg-green-50 text-green-700 border-green-200"
-                  : "bg-amber-50 text-amber-700 border-amber-200"
-              }`}
-            >
-              Reconciliation: {reconciliation.overall}
-              {reconciliation.globalFlags.length > 0 && (
-                <span className="block font-normal mt-0.5 text-[11px] opacity-80">
-                  {reconciliation.globalFlags.join(" · ")}
-                </span>
-              )}
-            </div>
-          )}
+
           <div className="px-4 py-3 border-b border-border space-y-2.5">
             <div className="flex items-center justify-between">
               <div className="text-sm font-semibold text-foreground">Findings</div>

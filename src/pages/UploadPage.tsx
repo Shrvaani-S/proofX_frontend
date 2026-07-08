@@ -793,7 +793,7 @@ function DropZone({
   );
 }
 
-const BULK_MAX_FILES = 5;
+const BULK_MAX_FILES = 50;
 
 function MultiDropZone({
   label, files, onFiles, variant, compact = false,
