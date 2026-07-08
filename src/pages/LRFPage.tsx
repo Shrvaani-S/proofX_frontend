@@ -74,9 +74,16 @@ export function LRFPage({ onNext, onSkip, onBack, initialData, nextLabel }: Prop
   };
 
   const saveDraft = () => {
+    // File objects serialise to {} via JSON.stringify (File has no own enumerable
+    // properties). An {} survives JSON.parse as a truthy non-Blob and later causes
+    // FormData.append to throw "parameter 2 is not of type 'Blob'". Strip oldFile/
+    // newFile before serialising so they are absent (not {}) on restore.
+    const serializableChanges = Object.fromEntries(
+      Object.entries(changes).map(([k, v]) => [k, { changeType: v.changeType, oldValue: v.oldValue, newValue: v.newValue }])
+    );
     localStorage.setItem(DRAFT_KEY, JSON.stringify({
       metadata: { crNumber, partNumber, labelVersion, productName, requestedBy, date },
-      changes, customAttributes,
+      changes: serializableChanges, customAttributes,
     }));
   };
 

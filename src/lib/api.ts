@@ -396,6 +396,33 @@ export async function getBulkStatus(jobId: string): Promise<BulkJobStatus> {
   return res.json();
 }
 
+/** POST /api/bulk-reconcile/{job_id}/{file_index}/{page_index} — run LRF
+ *  reconciliation for one bulk pair (equivalent of /api/reconcile for single
+ *  mode). Called lazily from loadBulkPairDetail after the pair's report loads. */
+export async function bulkReconcile(
+  jobId: string,
+  fileIndex: number,
+  pageIndex: number,
+  lrf: ReconcileLRF,
+  opts: { reviewerAcknowledged?: string[]; refImages?: RefImageUpload[] } = {},
+): Promise<ReconcileReport> {
+  const form = new FormData();
+  form.append("lrf", JSON.stringify(lrf));
+  form.append("reviewer_acknowledged", JSON.stringify(opts.reviewerAcknowledged ?? []));
+  for (const ref of opts.refImages ?? []) {
+    form.append("ref_images", ref.file, ref.name);
+  }
+  const res = await fetch(
+    `${API_BASE_URL}/api/bulk-reconcile/${jobId}/${fileIndex}/${pageIndex}`,
+    { method: "POST", body: form, headers: authHeaders() },
+  );
+  if (!res.ok) {
+    if (res.status === 401) handleUnauthorized();
+    throw new Error(`bulk reconcile failed: ${await parseErrorDetail(res)}`);
+  }
+  return res.json();
+}
+
 /** POST /api/bulk-confirm/{job_id} — proceed past the popup: compare the
  *  surviving (non-excluded) pages. Poll getBulkStatus until status === "done". */
 export async function confirmBulk(

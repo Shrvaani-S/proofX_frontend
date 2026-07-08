@@ -314,7 +314,7 @@ export async function exportPDF(
     doc.setFontSize(7.8);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(160, 185, 215);
-    doc.text("AUDIT-READY  \u00b7  CHANGE CONTROL RECORD", ML + 5.8, CARD_TOP + 23.5);
+    doc.text("AUDIT TRAIL  \u00b7  CHANGE CONTROL RECORD", ML + 5.8, CARD_TOP + 23.5);
 
     // Column dividers
     doc.setLineWidth(0.3);
@@ -330,7 +330,7 @@ export async function exportPDF(
       { label: "REPORT ID",                value: reportId                },
       { label: "GENERATED",                value: timestamp               },
       { label: "USER",                     value: analystName || "\u2014" },
-      { label: "TOTAL DOCUMENTS REVIEWED", value: `${exportPairs.length} pair${exportPairs.length !== 1 ? "s" : ""}` },
+      { label: "TOTAL DOCUMENTS",          value: `${exportPairs.length} pair${exportPairs.length !== 1 ? "s" : ""}` },
     ];
 
     let cx = ML;
@@ -674,20 +674,22 @@ export async function exportPDF(
       doc.text(status, badgeX + badgeW / 2, badgeY + badgeH / 2 + 1.25, { align: "center" });
     }
 
-    // Back to Summary Table Button
-    const backW = 44;
-    const backX = 194 - backW; // 150: perfectly symmetric 4mm inset from right margin
+    // Back to Summary Table Button — width measured from actual text so the
+    // button hugs the label with a fixed 3mm padding on each side.
+    const backLabel = "\u00AB Back to Summary Table";
     const backY = 17.2;
-    const backH = 5.5;
-    
-    doc.setFillColor(238, 241, 246);
-    doc.roundedRect(backX, backY, backW, backH, 1.5, 1.5, "F");
-    
-    doc.setTextColor(...navy);
+    const backH = 6;
     doc.setFontSize(7.5);
     doc.setFont("helvetica", "bold");
-    doc.text("\u2190 Back to Summary Table", backX + backW / 2, backY + backH / 2 + 1.15, { align: "center" });
-    
+    const backW = doc.getTextWidth(backLabel) + 6; // 3mm left + 3mm right padding
+    const backX = 194 - backW;
+
+    doc.setFillColor(238, 241, 246);
+    doc.roundedRect(backX, backY, backW, backH, 1.5, 1.5, "F");
+
+    doc.setTextColor(...navy);
+    doc.text(backLabel, backX + 3, backY + backH / 2 + 1.15);
+
     doc.link(backX, backY, backW, backH, { pageNumber: SUMMARY_PAGE });
 
     // CURRENT / REVISED names row (just below the navy header)
@@ -950,8 +952,8 @@ export async function exportPDF(
       }
       if (showStatus && data.section === "body" && data.column.index === 5) {
         const val = typeof data.cell.raw === "string" ? data.cell.raw : "";
-        if (val === "Pass") { data.cell.styles.fillColor = [29, 158, 117]; data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
-        if (val === "Fail") { data.cell.styles.fillColor = [220, 38, 38];  data.cell.styles.textColor = [255, 255, 255]; data.cell.styles.fontStyle = "bold"; }
+        if (val === "Pass") { data.cell.styles.fillColor = [158, 217, 159]; data.cell.styles.textColor = [28, 94, 32]; data.cell.styles.fontStyle = "bold"; }
+        if (val === "Fail") { data.cell.styles.fillColor = [242, 191, 163];  data.cell.styles.textColor = [154, 52, 18]; data.cell.styles.fontStyle = "bold"; }
       }
     },
     didDrawCell(data) {

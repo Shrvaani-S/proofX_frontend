@@ -72,6 +72,10 @@ export function buildLabelPair(
     findings,
     width,
     height,
+    // Always fully loaded — this builder is only called with a complete
+    // response already in hand (single-mode, or a bulk on-demand fetch).
+    // Only bulk skeletons created in proceedBulk start as loaded: false.
+    loaded: true,
   };
 
   return { pair, idMap };
@@ -118,6 +122,7 @@ export function buildLabelPairFromReport(
     findings,
     width,
     height,
+    loaded: true,
   };
 
   return { pair, idMap };
