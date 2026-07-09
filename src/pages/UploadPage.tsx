@@ -207,6 +207,8 @@ export function UploadPage({ lrfData, runError, onBack, onRun }: Props) {
         <div className="flex items-center gap-2">
           <ScanLine size={18} />
           <span className="text-sm font-bold tracking-tight uppercase">ProofX</span>
+          <span className="text-white/30 mx-1">|</span>
+          <img src="/novintix-logo.png" alt="Novintix" className="h-7 w-auto" style={{ mixBlendMode: "screen" }} />
           {lrfData && (
             <>
               <span className="text-white/30 mx-1">|</span>

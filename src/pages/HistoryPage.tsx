@@ -56,6 +56,8 @@ export function HistoryPage({ onBack }: Props) {
             <ScanLine size={18} />
             <span className="text-sm font-bold tracking-tight uppercase">ProofX</span>
             <span className="text-white/30 mx-1">|</span>
+            <img src="/novintix-logo.png" alt="Novintix" className="h-7 w-auto" style={{ mixBlendMode: "screen" }} />
+            <span className="text-white/30 mx-1">|</span>
             <span className="text-xs text-white/70 font-medium">Run History</span>
           </div>
         </div>
