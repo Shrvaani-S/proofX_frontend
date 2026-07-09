@@ -25,7 +25,7 @@ import {
   isAuthenticated,
   logout,
 } from "@/lib/api";
-import type { BulkJobStatus, BulkPairResult, BulkExcludedPage, AlignCompareResponse } from "@/lib/api";
+import type { BulkJobStatus, BulkPairResult, BulkExcludedPage } from "@/lib/api";
 import { buildLabelPair } from "@/lib/backendMapping";
 import { buildReconcileLRF, applyReconciliation, type ReconciliationOverrides } from "@/lib/lrfReconcile";
 import type { LabelPair } from "@/types/label";
@@ -82,9 +82,9 @@ export default function App() {
   const [preprocessExcluded, setPreprocessExcluded] = useState<BulkExcludedPage[]>([]);
   // true once user clicks Continue in the preprocessing modal — reveals the popup
   const [showConfirmPopup, setShowConfirmPopup] = useState(false);
-  // Single-file Phase A: stores alignCompare result until user clicks Continue
+  // Single-file Phase A: stores bulk job_id + files until user clicks Continue
   const [singleCompareResult, setSingleCompareResult] = useState<{
-    response: AlignCompareResponse;
+    jobId: string;
     files: UploadedFileNames;
   } | null>(null);
   const [singlePreprocessComplete, setSinglePreprocessComplete] = useState(false);
@@ -272,7 +272,7 @@ export default function App() {
  
     try {
       if (m === "single") {
-        // Phase A: pre-process (alignment check) — show PreprocessingModal
+        // Phase A: pre-process via the bulk endpoint (alignment only, no comparison yet)
         setIsPreprocessPhase(true);
         setPreprocessPairNames([{
           master: files.masterNames[0],
@@ -283,22 +283,23 @@ export default function App() {
         setPreprocessExcluded([]);
         setBulkProgress({ completed: 0, total: 1 });
 
-        const response = await alignCompare(files.masterFiles[0], files.revisedFiles[0], {
-          onUploadDone: () => setUploadComplete(true),
-        });
+        const { job_id } = await startBulkCompare(
+          [files.masterFiles[0]], [files.revisedFiles[0]],
+          { onUploadDone: () => setUploadComplete(true) },
+        );
 
-        const isFlagged = response.combined_report.alignment_status === "FLAGGED";
-        const singleExcluded: BulkExcludedPage[] = isFlagged ? [{
-          file_index: 0,
-          page_index: null,
-          base_name: files.masterNames[0],
-          revised_name: files.revisedNames[0],
-          classification: "variable_shift",
-        }] : [];
-        if (isFlagged) setPreprocessExcluded(singleExcluded);
+        const preStatus = await pollBulk(
+          job_id,
+          (s) => s.status === "needs_confirmation",
+          (s) => {
+            setBulkProgress({ completed: s.phase_a.done, total: s.phase_a.total || 1 });
+            setPreprocessExcluded([...s.excluded]);
+          },
+        );
+
         setBulkProgress({ completed: 1, total: 1 });
-        setSingleCompareResult({ response, files });
-        setSingleConfirm({ excluded: singleExcluded, willCompareCount: isFlagged ? 0 : 1 });
+        setSingleCompareResult({ jobId: job_id, files });
+        setSingleConfirm({ excluded: preStatus.excluded, willCompareCount: preStatus.will_compare_count });
         setSinglePreprocessComplete(true);
         return;
       }
@@ -529,6 +530,7 @@ export default function App() {
   };
 
   const reuploadSingle = () => {
+    const jobId = singleCompareResult?.jobId;
     setSingleConfirm(null);
     setSinglePreprocessComplete(false);
     setSingleCompareResult(null);
@@ -538,11 +540,13 @@ export default function App() {
     setPreprocessExcluded([]);
     setBulkProgress(null);
     setStage("upload");
+    // Discard the Phase A bulk job and its stored files
+    if (jobId) cancelBulk(jobId).catch(() => {});
   };
 
   const proceedSingle = async () => {
     if (!singleCompareResult) return;
-    const { response, files: storedFiles } = singleCompareResult;
+    const { jobId, files: storedFiles } = singleCompareResult;
     // Clear confirmation popup state
     setSingleConfirm(null);
     setShowConfirmPopup(false);
@@ -553,8 +557,11 @@ export default function App() {
     // Set up analysis phase — reuse bulk-style display for the single pair
     setBulkPairNames([{ master: storedFiles.masterNames[0], revised: storedFiles.revisedNames[0] }]);
     setBulkProgress({ completed: 0, total: 1 });
+    // Phase A bulk job is no longer needed — analysis uses the single endpoint
+    cancelBulk(jobId).catch(() => {});
 
     try {
+      const response = await alignCompare(storedFiles.masterFiles[0], storedFiles.revisedFiles[0]);
       await finishResults([{
         file_index: 0,
         page_index: 0,
