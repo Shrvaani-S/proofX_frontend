@@ -6,7 +6,7 @@
 if (import.meta.env.PROD && !import.meta.env.VITE_API_BASE_URL) {
   throw new Error("[ProofX] VITE_API_BASE_URL is not set. Configure it in your .env file before building for production.");
 }
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "https://label-comparator-new.azurewebsites.net";
 
 export interface BackendFinding {
   id: number;
